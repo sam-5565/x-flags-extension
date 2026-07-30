@@ -1,6 +1,6 @@
 {
   "name": "x-flags-extension",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "private": true,
   "description": "Display country flags and account metadata next to usernames on X",
   "scripts": {
