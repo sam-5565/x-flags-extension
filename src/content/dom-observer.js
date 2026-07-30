@@ -35,7 +35,7 @@ const DOMObserver = {
     this._setupIntersectionObserver();
     this._setupScrollTracking();
 
-    console.log('[DOMObserver] Initialized');
+    XFlagLogger.log('[DOMObserver] Initialized');
   },
 
   /**
@@ -54,7 +54,7 @@ const DOMObserver = {
       subtree: true
     });
 
-    console.log('[DOMObserver] Started observing');
+    XFlagLogger.log('[DOMObserver] Started observing');
 
     // Process initial content
     this._processNewContent();
@@ -80,7 +80,7 @@ const DOMObserver = {
       clearTimeout(this.scrollTimer);
     }
 
-    console.log('[DOMObserver] Stopped observing');
+    XFlagLogger.log('[DOMObserver] Stopped observing');
   },
 
   /**
@@ -190,7 +190,7 @@ const DOMObserver = {
       return;
     }
 
-    console.log(`[DOMObserver] Found ${newElements.length} new username elements`);
+    XFlagLogger.log(`[DOMObserver] Found ${newElements.length} new username elements`);
 
     // Add to pending and observe for visibility
     for (const item of newElements) {

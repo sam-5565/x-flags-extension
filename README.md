@@ -8,7 +8,8 @@ Display country flags next to usernames on X.com (Twitter).
 - Displays account join year
 - Hover over usernames to see detailed info
 - Works on feeds, search results, and profile pages
-- All data cached locally - nothing sent to external servers
+- Caches profile metadata locally to reduce requests to X
+- Sends no analytics or profile data to third parties
 
 ## Installation
 
@@ -18,9 +19,9 @@ Display country flags next to usernames on X.com (Twitter).
 2. Open Chrome/Brave and go to `chrome://extensions/`
 3. Enable "Developer mode" (toggle in top right)
 4. Click "Load unpacked"
-5. Select the `x-plugin` folder
+5. Select the cloned `x-flags-extension` folder
 
-### Firefox
+### Firefox 142+
 
 1. Download the latest release or clone this repository
 2. Open Firefox and go to `about:debugging`
@@ -45,9 +46,22 @@ Display country flags next to usernames on X.com (Twitter).
 
 ## Privacy
 
-- No data is collected or transmitted to external servers
+- No analytics, telemetry, or profile data is sent to third-party servers
+- Profile lookups are requested directly from X while you are signed in
 - Profile data is cached locally in your browser
 - Only reads publicly visible profile information from X.com
+
+## Development
+
+Run the dependency-free validation suite before loading or publishing the
+extension:
+
+```bash
+npm test
+```
+
+The checks validate JavaScript syntax, manifest-referenced files, shared country
+helpers, and cache import behavior.
 
 ## License
 

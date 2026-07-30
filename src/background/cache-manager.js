@@ -36,7 +36,7 @@ class CacheManager {
       }
 
       this.initialized = true;
-      console.log(`[CacheManager] Initialized with ${this.memoryCache.size} entries`);
+      XFlagLogger.log(`[CacheManager] Initialized with ${this.memoryCache.size} entries`);
     } catch (error) {
       console.error('[CacheManager] Init error:', error);
       this.initialized = true;
@@ -148,7 +148,7 @@ class CacheManager {
   async clear() {
     this.memoryCache.clear();
     await chrome.storage.local.remove([this.STORAGE_KEY, this.STATS_KEY]);
-    console.log('[CacheManager] Cache cleared');
+    XFlagLogger.log('[CacheManager] Cache cleared');
   }
 
   /**
@@ -210,24 +210,48 @@ class CacheManager {
    * @returns {number} Number of entries imported
    */
   async import(data) {
-    if (!data || !data.entries) {
+    if (!data || typeof data.entries !== 'object' ||
+        data.entries === null || Array.isArray(data.entries)) {
       throw new Error('Invalid import data');
+    }
+    if (data.version !== undefined && data.version !== 1) {
+      throw new Error('Unsupported import version');
     }
 
     await this.init();
 
     let imported = 0;
     for (const [username, entry] of Object.entries(data.entries)) {
+      const normalizedUsername = username.toLowerCase();
+
+      if (!/^[a-z0-9_]{1,15}$/.test(normalizedUsername) ||
+          !entry || typeof entry !== 'object' || Array.isArray(entry)) {
+        continue;
+      }
+
+      if (this.memoryCache.size >= this.MAX_ENTRIES &&
+          !this.memoryCache.has(normalizedUsername)) {
+        break;
+      }
+
       // Skip expired entries
-      const ttl = entry.ttl || this.DEFAULT_TTL;
-      if (Date.now() - entry.fetchedAt <= ttl) {
-        this.memoryCache.set(username.toLowerCase(), entry);
+      const fetchedAt = Number(entry.fetchedAt);
+      const ttl = Number(entry.ttl || this.DEFAULT_TTL);
+      if (Number.isFinite(fetchedAt) && Number.isFinite(ttl) && ttl > 0 &&
+          Date.now() - fetchedAt <= ttl) {
+        this.memoryCache.set(normalizedUsername, {
+          ...entry,
+          username: entry.username || username,
+          fetchedAt,
+          lastAccessed: Number(entry.lastAccessed) || fetchedAt,
+          ttl
+        });
         imported++;
       }
     }
 
     await this._persistCache();
-    console.log(`[CacheManager] Imported ${imported} entries`);
+    XFlagLogger.log(`[CacheManager] Imported ${imported} entries`);
 
     return imported;
   }
@@ -247,7 +271,7 @@ class CacheManager {
       this.memoryCache.delete(entries[i][0]);
     }
 
-    console.log(`[CacheManager] Evicted ${toRemove} LRU entries`);
+    XFlagLogger.log(`[CacheManager] Evicted ${toRemove} LRU entries`);
   }
 
   /**

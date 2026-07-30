@@ -18,7 +18,7 @@ const UsernameFinder = {
 
     // Strategy 1: Find usernames in tweets
     const tweets = document.querySelectorAll('article[data-testid="tweet"]');
-    console.log('[XFlag:UsernameFinder] Found tweets:', tweets.length);
+    XFlagLogger.log('[XFlag:UsernameFinder] Found tweets:', tweets.length);
     for (const tweet of tweets) {
       const usernameElements = this._findUsernamesInTweet(tweet);
       results.push(...usernameElements);
@@ -26,7 +26,7 @@ const UsernameFinder = {
 
     // Strategy 2: Find usernames in user cells (lists, followers, etc.)
     const userCells = document.querySelectorAll('[data-testid="UserCell"]');
-    console.log('[XFlag:UsernameFinder] Found user cells:', userCells.length);
+    XFlagLogger.log('[XFlag:UsernameFinder] Found user cells:', userCells.length);
     for (const cell of userCells) {
       const usernameElements = this._findUsernamesInUserCell(cell);
       results.push(...usernameElements);
@@ -34,7 +34,7 @@ const UsernameFinder = {
 
     // Strategy 3: Find username in profile header
     const profileHeader = document.querySelector('[data-testid="UserName"]');
-    console.log('[XFlag:UsernameFinder] Found profile header:', !!profileHeader);
+    XFlagLogger.log('[XFlag:UsernameFinder] Found profile header:', !!profileHeader);
     if (profileHeader) {
       const usernameElements = this._findUsernamesInProfileHeader(profileHeader);
       results.push(...usernameElements);
@@ -42,7 +42,7 @@ const UsernameFinder = {
 
     // Strategy 4: Generic fallback - find all username links
     const genericLinks = document.querySelectorAll('a[href^="/"][role="link"]');
-    console.log('[XFlag:UsernameFinder] Found generic links:', genericLinks.length);
+    XFlagLogger.log('[XFlag:UsernameFinder] Found generic links:', genericLinks.length);
     for (const link of genericLinks) {
       if (this.foundElements.has(link)) continue;
 
@@ -52,7 +52,7 @@ const UsernameFinder = {
       }
     }
 
-    console.log('[XFlag:UsernameFinder] Total results:', results.length);
+    XFlagLogger.log('[XFlag:UsernameFinder] Total results:', results.length);
     return results;
   },
 
@@ -281,9 +281,12 @@ const UsernameFinder = {
   /**
    * Mark an element as processed
    */
-  markProcessed(element) {
+  markProcessed(element, username) {
     element.setAttribute(CONSTANTS.DATA_ATTRS.PROCESSED, 'true');
     element.setAttribute(CONSTANTS.DATA_ATTRS.TIMESTAMP, Date.now().toString());
+    if (username) {
+      element.setAttribute(CONSTANTS.DATA_ATTRS.USERNAME, username.toLowerCase());
+    }
   },
 
   /**
@@ -301,6 +304,7 @@ const UsernameFinder = {
     for (const el of processed) {
       el.removeAttribute(CONSTANTS.DATA_ATTRS.PROCESSED);
       el.removeAttribute(CONSTANTS.DATA_ATTRS.TIMESTAMP);
+      el.removeAttribute(CONSTANTS.DATA_ATTRS.USERNAME);
     }
     this.foundElements = new WeakSet();
   }

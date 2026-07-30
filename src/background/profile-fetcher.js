@@ -151,7 +151,7 @@ class ProfileFetcher {
    */
   async _doFetch(username) {
     try {
-      console.log(`[ProfileFetcher] Fetching profile: ${username}`);
+      XFlagLogger.log(`[ProfileFetcher] Fetching profile: ${username}`);
 
       // Try to use X's GraphQL API for user data
       const profileData = await this._fetchViaGraphQL(username);
@@ -165,7 +165,7 @@ class ProfileFetcher {
       }
 
       // Fallback: return empty data (user will need to visit profile manually)
-      console.log(`[ProfileFetcher] Could not fetch data for ${username}, user needs to visit profile`);
+      XFlagLogger.log(`[ProfileFetcher] Could not fetch data for ${username}, user needs to visit profile`);
       const emptyData = {
         username: username,
         basedIn: null,
@@ -202,7 +202,7 @@ class ProfileFetcher {
 
       const url = `https://x.com/i/api/graphql/${queryId}/AboutAccountQuery?variables=${encodeURIComponent(variables)}`;
 
-      console.log(`[ProfileFetcher] Fetching AboutAccountQuery for ${username}`);
+      XFlagLogger.log(`[ProfileFetcher] Fetching AboutAccountQuery for ${username}`);
 
       const response = await fetch(url, {
         credentials: 'include',
@@ -222,12 +222,12 @@ class ProfileFetcher {
       }
 
       if (!response.ok) {
-        console.log(`[ProfileFetcher] AboutAccountQuery failed: ${response.status}`);
+        XFlagLogger.log(`[ProfileFetcher] AboutAccountQuery failed: ${response.status}`);
         return null;
       }
 
       const json = await response.json();
-      console.log(`[ProfileFetcher] AboutAccountQuery response for ${username}:`, JSON.stringify(json).substring(0, 1000));
+      XFlagLogger.log(`[ProfileFetcher] AboutAccountQuery response for ${username}:`, JSON.stringify(json).substring(0, 1000));
 
       return this._parseAboutAccountResponse(json, username);
 
@@ -259,7 +259,7 @@ class ProfileFetcher {
       const userResult = json?.data?.user_result_by_screen_name?.result;
 
       if (!userResult) {
-        console.log(`[ProfileFetcher] No user data in AboutAccountQuery response`);
+        XFlagLogger.log(`[ProfileFetcher] No user data in AboutAccountQuery response`);
         return null;
       }
 
@@ -278,7 +278,7 @@ class ProfileFetcher {
             country: aboutProfile.account_based_in,
             raw: aboutProfile.account_based_in
           };
-          console.log(`[ProfileFetcher] Found basedIn: ${aboutProfile.account_based_in}`);
+          XFlagLogger.log(`[ProfileFetcher] Found basedIn: ${aboutProfile.account_based_in}`);
         }
 
         // Extract "Connected via" (device/app store region)
@@ -292,13 +292,13 @@ class ProfileFetcher {
             country: region,
             raw: connectedVia
           };
-          console.log(`[ProfileFetcher] Found connectedVia: ${connectedVia}`);
+          XFlagLogger.log(`[ProfileFetcher] Found connectedVia: ${connectedVia}`);
         }
 
         // Check for VPN warning indicator
         if (aboutProfile.has_location_warning || aboutProfile.location_mismatch) {
           data.hasVpnWarning = true;
-          console.log(`[ProfileFetcher] Found VPN warning`);
+          XFlagLogger.log(`[ProfileFetcher] Found VPN warning`);
         }
 
         // Extract join date
@@ -307,7 +307,7 @@ class ProfileFetcher {
           if (joinMatch) {
             data.joinedMonth = joinMatch[1];
             data.joinedYear = parseInt(joinMatch[2], 10);
-            console.log(`[ProfileFetcher] Found joined: ${data.joinedMonth} ${data.joinedYear}`);
+            XFlagLogger.log(`[ProfileFetcher] Found joined: ${data.joinedMonth} ${data.joinedYear}`);
           }
         }
 
@@ -352,7 +352,7 @@ class ProfileFetcher {
         data.isVerified = true;
       }
 
-      console.log(`[ProfileFetcher] Parsed AboutAccount data for ${username}:`, JSON.stringify(data));
+      XFlagLogger.log(`[ProfileFetcher] Parsed AboutAccount data for ${username}:`, JSON.stringify(data));
       return data;
 
     } catch (error) {
@@ -391,7 +391,7 @@ class ProfileFetcher {
                            html.match(/<script[^>]*type="application\/json"[^>]*>([^<]+)<\/script>/g);
 
       if (scriptMatches) {
-        console.log(`[ProfileFetcher] Found script tags with potential data for ${username}`);
+        XFlagLogger.log(`[ProfileFetcher] Found script tags with potential data for ${username}`);
       }
 
       // Look for user data in JSON format embedded in the page
@@ -400,7 +400,7 @@ class ProfileFetcher {
       if (createdAtMatch) {
         data.joinedYear = parseInt(createdAtMatch[2], 10);
         data.joinedMonth = createdAtMatch[1];
-        console.log(`[ProfileFetcher] Found created_at year: ${data.joinedYear}`);
+        XFlagLogger.log(`[ProfileFetcher] Found created_at year: ${data.joinedYear}`);
       }
 
       // Alternative: look for "Joined Month Year" in any format
@@ -409,7 +409,7 @@ class ProfileFetcher {
       if (joinedMatch && !data.joinedYear) {
         data.joinedYear = parseInt(joinedMatch[2], 10);
         data.joinedMonth = joinedMatch[1];
-        console.log(`[ProfileFetcher] Found joined: ${joinedMatch[1]} ${joinedMatch[2]}`);
+        XFlagLogger.log(`[ProfileFetcher] Found joined: ${joinedMatch[1]} ${joinedMatch[2]}`);
       }
 
       // Look for location data in JSON
@@ -422,7 +422,7 @@ class ProfileFetcher {
             country: location,
             raw: location
           };
-          console.log(`[ProfileFetcher] Found location: ${location}`);
+          XFlagLogger.log(`[ProfileFetcher] Found location: ${location}`);
         }
       }
 
@@ -439,7 +439,7 @@ class ProfileFetcher {
       // Look for screen_name to verify we have the right user
       const screenNameMatch = html.match(/"screen_name"\s*:\s*"([^"]+)"/i);
       if (screenNameMatch) {
-        console.log(`[ProfileFetcher] Found screen_name: ${screenNameMatch[1]}`);
+        XFlagLogger.log(`[ProfileFetcher] Found screen_name: ${screenNameMatch[1]}`);
       }
 
       // Look for name (display name)
@@ -459,7 +459,7 @@ class ProfileFetcher {
         }
       }
 
-      console.log(`[ProfileFetcher] Parsed data for ${username}:`, JSON.stringify(data));
+      XFlagLogger.log(`[ProfileFetcher] Parsed data for ${username}:`, JSON.stringify(data));
 
     } catch (error) {
       console.error('[ProfileFetcher] Parse error:', error);

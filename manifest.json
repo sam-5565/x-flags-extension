@@ -6,7 +6,7 @@
   "browser_specific_settings": {
     "gecko": {
       "id": "xflag@xflag.extension",
-      "strict_min_version": "140.0",
+      "strict_min_version": "142.0",
       "data_collection_permissions": {
         "required": ["websiteContent"],
         "optional": ["technicalAndInteraction"]
@@ -14,8 +14,7 @@
     }
   },
   "permissions": [
-    "storage",
-    "activeTab"
+    "storage"
   ],
   "host_permissions": [
     "https://x.com/*",
