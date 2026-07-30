@@ -89,7 +89,32 @@ const CONSTANTS = {
   }
 };
 
+/**
+ * Verbose logging shared by content scripts and the background worker.
+ * Errors and warnings still use the console directly; profile/API details are
+ * only logged when Debug Mode is enabled.
+ */
+const XFlagLogger = {
+  enabled: false,
+
+  setEnabled(enabled) {
+    this.enabled = Boolean(enabled);
+  },
+
+  log(...args) {
+    if (this.enabled) {
+      console.log(...args);
+    }
+  }
+};
+
 // Make available globally for content scripts
 if (typeof window !== 'undefined') {
   window.CONSTANTS = CONSTANTS;
+  window.XFlagLogger = XFlagLogger;
+}
+
+// Make available to the background service worker.
+if (typeof self !== 'undefined') {
+  self.XFlagLogger = XFlagLogger;
 }

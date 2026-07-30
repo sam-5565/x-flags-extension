@@ -1,0 +1,110 @@
+import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
+import path from 'node:path';
+import test from 'node:test';
+import vm from 'node:vm';
+import { fileURLToPath } from 'node:url';
+
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const constantsSource = await readFile(
+  path.join(root, 'src/shared/constants.js'),
+  'utf8'
+);
+const cacheManagerSource = await readFile(
+  path.join(root, 'src/background/cache-manager.js'),
+  'utf8'
+);
+
+function createCacheManager() {
+  const storage = {};
+  const context = vm.createContext({
+    Blob,
+    chrome: {
+      storage: {
+        local: {
+          async get(keys) {
+            return Object.fromEntries(
+              keys
+                .filter(key => Object.hasOwn(storage, key))
+                .map(key => [key, storage[key]])
+            );
+          },
+          async set(values) {
+            Object.assign(storage, values);
+          },
+          async remove(keys) {
+            for (const key of keys) delete storage[key];
+          }
+        }
+      }
+    },
+    console,
+    self: {}
+  });
+
+  vm.runInContext(constantsSource, context);
+  vm.runInContext(cacheManagerSource, context);
+
+  return {
+    cache: new context.self.CacheManager(),
+    storage
+  };
+}
+
+test('cache keys are case-insensitive', async () => {
+  const { cache } = createCacheManager();
+  await cache.set('Example_User', { joinedYear: 2020 });
+
+  const entry = await cache.get('example_user');
+  assert.equal(entry.username, 'Example_User');
+  assert.equal(entry.joinedYear, 2020);
+});
+
+test('imports valid entries and skips expired or malformed entries', async () => {
+  const { cache } = createCacheManager();
+  const now = Date.now();
+
+  const imported = await cache.import({
+    version: 1,
+    entries: {
+      valid_user: {
+        username: 'valid_user',
+        joinedYear: 2021,
+        fetchedAt: now,
+        lastAccessed: now,
+        ttl: 60_000
+      },
+      expired_user: {
+        username: 'expired_user',
+        joinedYear: 2019,
+        fetchedAt: now - 120_000,
+        ttl: 60_000
+      },
+      'not a username': {
+        fetchedAt: now,
+        ttl: 60_000
+      },
+      malformed_user: {
+        fetchedAt: 'not-a-timestamp',
+        ttl: 60_000
+      }
+    }
+  });
+
+  assert.equal(imported, 1);
+  assert.equal((await cache.get('valid_user')).joinedYear, 2021);
+  assert.equal(await cache.get('expired_user'), null);
+});
+
+test('rejects unsupported or invalid import formats', async () => {
+  const { cache } = createCacheManager();
+
+  await assert.rejects(
+    cache.import({ version: 2, entries: {} }),
+    /Unsupported import version/
+  );
+  await assert.rejects(
+    cache.import({ version: 1, entries: [] }),
+    /Invalid import data/
+  );
+});

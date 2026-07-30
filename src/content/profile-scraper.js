@@ -17,7 +17,7 @@ const ProfileScraper = {
    * Initialize the scraper
    */
   async init() {
-    console.log('[ProfileScraper] Initializing...');
+    XFlagLogger.log('[ProfileScraper] Initializing...');
 
     // Load cached profiles from background on init
     await this._loadFromCache();
@@ -38,14 +38,15 @@ const ProfileScraper = {
 
       if (response && response.data) {
         for (const [username, profileData] of Object.entries(response.data)) {
-          if (profileData && (profileData.joinedYear || profileData.basedIn)) {
+          if (profileData &&
+              (profileData.joinedYear || profileData.basedIn || profileData.connectedVia)) {
             this.scrapedProfiles.set(username.toLowerCase(), profileData);
           }
         }
-        console.log('[ProfileScraper] Loaded', this.scrapedProfiles.size, 'profiles from cache');
+        XFlagLogger.log('[ProfileScraper] Loaded', this.scrapedProfiles.size, 'profiles from cache');
       }
     } catch (error) {
-      console.log('[ProfileScraper] Could not load from cache:', error.message);
+      XFlagLogger.log('[ProfileScraper] Could not load from cache:', error.message);
     }
   },
 
@@ -97,7 +98,7 @@ const ProfileScraper = {
       return;
     }
 
-    console.log(`[ProfileScraper] On profile page for: ${username}`);
+    XFlagLogger.log(`[ProfileScraper] On profile page for: ${username}`);
 
     // Wait a bit for content to load, then scrape
     setTimeout(() => this._scrapeProfileData(username), 1500);
@@ -107,7 +108,7 @@ const ProfileScraper = {
    * Scrape profile data from the current page
    */
   async _scrapeProfileData(username) {
-    console.log(`[ProfileScraper] Scraping data for: ${username}`);
+    XFlagLogger.log(`[ProfileScraper] Scraping data for: ${username}`);
 
     const data = {
       username: username,
@@ -136,7 +137,7 @@ const ProfileScraper = {
       // Find the profile header area
       const primaryColumn = document.querySelector('[data-testid="primaryColumn"]');
       if (!primaryColumn) {
-        console.log('[ProfileScraper] No primary column found');
+        XFlagLogger.log('[ProfileScraper] No primary column found');
         return;
       }
 
@@ -192,7 +193,7 @@ const ProfileScraper = {
         }
       }
 
-      console.log('[ProfileScraper] Scraped data:', JSON.stringify(data));
+      XFlagLogger.log('[ProfileScraper] Scraped data:', JSON.stringify(data));
 
       // Check if we already have better data cached
       const existing = this.scrapedProfiles.get(username);
@@ -200,7 +201,7 @@ const ProfileScraper = {
         // Merge: keep existing data if new scrape doesn't have it
         if (existing.basedIn && !data.basedIn) {
           data.basedIn = existing.basedIn;
-          console.log('[ProfileScraper] Preserved existing basedIn:', existing.basedIn);
+          XFlagLogger.log('[ProfileScraper] Preserved existing basedIn:', existing.basedIn);
         }
         if (existing.connectedVia && !data.connectedVia) {
           data.connectedVia = existing.connectedVia;
@@ -255,7 +256,7 @@ const ProfileScraper = {
     };
 
     const text = section.innerText;
-    console.log('[ProfileScraper] Parsing section text length:', text.length);
+    XFlagLogger.log('[ProfileScraper] Parsing section text length:', text.length);
 
     // Method 1: Use regex to find patterns in the full text
     // "Account based in" followed by location on next line or same line
@@ -267,7 +268,7 @@ const ProfileScraper = {
           country: location,
           raw: location
         };
-        console.log('[ProfileScraper] Found basedIn via regex:', location);
+        XFlagLogger.log('[ProfileScraper] Found basedIn via regex:', location);
       }
     }
 
@@ -283,7 +284,7 @@ const ProfileScraper = {
           country: region,
           raw: connection
         };
-        console.log('[ProfileScraper] Found connectedVia via regex:', connection);
+        XFlagLogger.log('[ProfileScraper] Found connectedVia via regex:', connection);
       }
     }
 
@@ -302,7 +303,7 @@ const ProfileScraper = {
               country: nextLine,
               raw: nextLine
             };
-            console.log('[ProfileScraper] Found basedIn via lines:', nextLine);
+            XFlagLogger.log('[ProfileScraper] Found basedIn via lines:', nextLine);
           }
         }
 
@@ -316,7 +317,7 @@ const ProfileScraper = {
               country: region,
               raw: nextLine
             };
-            console.log('[ProfileScraper] Found connectedVia via lines:', nextLine);
+            XFlagLogger.log('[ProfileScraper] Found connectedVia via lines:', nextLine);
           }
         }
       }
@@ -326,7 +327,7 @@ const ProfileScraper = {
     // This appears near "Account based in" when there's a location mismatch
     if (text.includes('ⓘ') || section.querySelector('[aria-label*="information"]') || section.querySelector('[data-testid*="info"]')) {
       result.hasVpnWarning = true;
-      console.log('[ProfileScraper] Found VPN warning indicator');
+      XFlagLogger.log('[ProfileScraper] Found VPN warning indicator');
     }
 
     return result;
@@ -380,11 +381,11 @@ const ProfileScraper = {
         username: username,
         data: data
       });
-      console.log('[ProfileScraper] Sent data to background');
+      XFlagLogger.log('[ProfileScraper] Sent data to background');
     } catch (error) {
       // Extension context invalidated - happens when extension is reloaded
       if (error.message?.includes('Extension context invalidated')) {
-        console.log('[ProfileScraper] Extension reloaded - refresh page to reconnect');
+        XFlagLogger.log('[ProfileScraper] Extension reloaded - refresh page to reconnect');
       } else {
         console.error('[ProfileScraper] Failed to send to background:', error);
       }

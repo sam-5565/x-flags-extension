@@ -1,12 +1,12 @@
 {
   "manifest_version": 3,
   "name": "X Country Flag Extension",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Display country flags and account metadata next to usernames on X/Twitter",
   "browser_specific_settings": {
     "gecko": {
       "id": "xflag@xflag.extension",
-      "strict_min_version": "140.0",
+      "strict_min_version": "142.0",
       "data_collection_permissions": {
         "required": ["websiteContent"],
         "optional": ["technicalAndInteraction"]
@@ -14,8 +14,7 @@
     }
   },
   "permissions": [
-    "storage",
-    "activeTab"
+    "storage"
   ],
   "host_permissions": [
     "https://x.com/*",

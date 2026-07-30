@@ -84,7 +84,7 @@ async function fetchProfileWithAuth(username, csrfToken) {
     const userQueryId = 'xmU6X_CKVnQ5lSrCbAmJsg';
     const userUrl = `https://x.com/i/api/graphql/${userQueryId}/UserByScreenName?variables=${encodeURIComponent(userVariables)}&features=${encodeURIComponent(userFeatures)}`;
 
-    console.log('[Background] Fetching UserByScreenName for:', username);
+    XFlagLogger.log('[Background] Fetching UserByScreenName for:', username);
     const userResponse = await fetch(userUrl, { credentials: 'include', headers });
 
     if (userResponse.ok) {
@@ -109,7 +109,7 @@ async function fetchProfileWithAuth(username, csrfToken) {
     const aboutQueryId = 'zs_jFPFT78rBpXv9Z3U2YQ';
     const aboutUrl = `https://x.com/i/api/graphql/${aboutQueryId}/AboutAccountQuery?variables=${encodeURIComponent(aboutVariables)}`;
 
-    console.log('[Background] Fetching AboutAccountQuery for:', username);
+    XFlagLogger.log('[Background] Fetching AboutAccountQuery for:', username);
     const aboutResponse = await fetch(aboutUrl, { credentials: 'include', headers });
 
     if (aboutResponse.ok) {
@@ -128,7 +128,7 @@ async function fetchProfileWithAuth(username, csrfToken) {
     console.error('[Background] AboutAccountQuery error:', error);
   }
 
-  console.log('[Background] Combined data for', username, ':', combinedData);
+  XFlagLogger.log('[Background] Combined data for', username, ':', combinedData);
 
   // Return null if we got nothing useful
   if (!combinedData.basedIn && !combinedData.joinedYear && !combinedData.connectedVia) {
@@ -165,7 +165,7 @@ function parseUserByScreenName(json, username) {
       if (monthMatch) {
         data.joinedMonth = monthMatch[1];
       }
-      console.log('[Background] Found join date:', data.joinedMonth, data.joinedYear);
+      XFlagLogger.log('[Background] Found join date:', data.joinedMonth, data.joinedYear);
     }
 
     if (legacy.name) data.displayName = legacy.name;
@@ -245,7 +245,7 @@ function parseAboutAccountResponse(json, username) {
 
     if (userResult.is_blue_verified) data.isVerified = true;
 
-    console.log('[Background] Parsed data:', username, data);
+    XFlagLogger.log('[Background] Parsed data:', username, data);
     return data;
 
   } catch (error) {
@@ -271,7 +271,9 @@ const DEFAULT_SETTINGS = {
 async function getSettings() {
   try {
     const data = await chrome.storage.local.get(SETTINGS_KEY);
-    return { ...DEFAULT_SETTINGS, ...data[SETTINGS_KEY] };
+    const settings = { ...DEFAULT_SETTINGS, ...data[SETTINGS_KEY] };
+    XFlagLogger.setEnabled(settings.debugMode);
+    return settings;
   } catch (error) {
     console.error('[Background] Error getting settings:', error);
     return DEFAULT_SETTINGS;
@@ -286,6 +288,7 @@ async function updateSettings(newSettings) {
     const current = await getSettings();
     const updated = { ...current, ...newSettings };
     await chrome.storage.local.set({ [SETTINGS_KEY]: updated });
+    XFlagLogger.setEnabled(updated.debugMode);
 
     // Notify all tabs of settings change
     const tabs = await chrome.tabs.query({ url: ['https://x.com/*', 'https://twitter.com/*'] });
@@ -387,12 +390,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         case 'SCRAPED_PROFILE_DATA': {
           // Handle profile data scraped from the DOM by content script
           const { username, data } = message;
-          console.log('[Background] Received scraped data for:', username, data);
+          XFlagLogger.log('[Background] Received scraped data for:', username, data);
 
           if (username && data) {
             const isVerified = data.isVerified || false;
             await cacheManager.set(username.toLowerCase(), data, isVerified, false);
-            console.log('[Background] Cached scraped data for:', username);
+            XFlagLogger.log('[Background] Cached scraped data for:', username);
           }
           return { success: true };
         }
@@ -402,18 +405,19 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           await cacheManager.init();
           const allProfiles = {};
           for (const [username, entry] of cacheManager.memoryCache.entries()) {
-            if (entry && !entry.isNegative && (entry.joinedYear || entry.basedIn)) {
+            if (entry && !entry.isNegative &&
+                (entry.joinedYear || entry.basedIn || entry.connectedVia)) {
               allProfiles[username] = entry;
             }
           }
-          console.log('[Background] Returning', Object.keys(allProfiles).length, 'cached profiles');
+          XFlagLogger.log('[Background] Returning', Object.keys(allProfiles).length, 'cached profiles');
           return { data: allProfiles };
         }
 
         case 'FETCH_PROFILE_WITH_AUTH': {
           // Fetch profile using CSRF token passed from content script
           const { username, csrfToken } = message;
-          console.log('[Background] Fetching profile with auth:', username);
+          XFlagLogger.log('[Background] Fetching profile with auth:', username);
 
           try {
             const data = await fetchProfileWithAuth(username, csrfToken);
@@ -450,7 +454,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
  * Handle extension install/update
  */
 chrome.runtime.onInstalled.addListener(async (details) => {
-  console.log('[Background] Extension installed/updated:', details.reason);
+  XFlagLogger.log('[Background] Extension installed/updated:', details.reason);
 
   // Initialize cache
   await cacheManager.init();
@@ -458,7 +462,7 @@ chrome.runtime.onInstalled.addListener(async (details) => {
   // Set default settings if first install
   if (details.reason === 'install') {
     await chrome.storage.local.set({ [SETTINGS_KEY]: DEFAULT_SETTINGS });
-    console.log('[Background] Default settings initialized');
+    XFlagLogger.log('[Background] Default settings initialized');
   }
 });
 
@@ -466,9 +470,12 @@ chrome.runtime.onInstalled.addListener(async (details) => {
  * Handle extension startup
  */
 chrome.runtime.onStartup.addListener(async () => {
-  console.log('[Background] Extension started');
+  XFlagLogger.log('[Background] Extension started');
   await cacheManager.init();
 });
 
 // Log service worker activation
-console.log('[Background] Service worker loaded');
+XFlagLogger.log('[Background] Service worker loaded');
+
+// Apply the persisted Debug Mode setting when the worker starts.
+getSettings();

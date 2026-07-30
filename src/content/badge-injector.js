@@ -6,6 +6,9 @@ const BadgeInjector = {
   // Current settings
   settings: null,
 
+  // Keep each injected badge associated with its username element.
+  injectedBadges: new WeakMap(),
+
   /**
    * Initialize with settings
    */
@@ -29,11 +32,14 @@ const BadgeInjector = {
     const container = document.createElement('span');
     container.className = CONSTANTS.CSS_CLASSES.BADGE_CONTAINER;
 
+    if (profileData?.isSuspended) {
+      container.appendChild(this._createSuspendedBadge());
+      return container;
+    }
+
     if (!profileData || profileData.error) {
       // Error state
-      if (profileData?.suspended) {
-        container.appendChild(this._createSuspendedBadge());
-      } else if (profileData?.notFound) {
+      if (profileData?.notFound) {
         // Don't show anything for not found
         return null;
       } else {
@@ -115,10 +121,7 @@ const BadgeInjector = {
   inject(usernameElement, badge) {
     if (!usernameElement || !badge) return;
 
-    // Check if already has a badge
-    const existingBadge = usernameElement.parentElement?.querySelector(
-      `.${CONSTANTS.CSS_CLASSES.BADGE_CONTAINER}`
-    );
+    const existingBadge = this.get(usernameElement);
 
     if (existingBadge) {
       existingBadge.replaceWith(badge);
@@ -126,6 +129,28 @@ const BadgeInjector = {
       // Insert after the username element
       usernameElement.insertAdjacentElement('afterend', badge);
     }
+
+    this.injectedBadges.set(usernameElement, badge);
+  },
+
+  /**
+   * Get the badge belonging to a username element.
+   */
+  get(usernameElement) {
+    if (!usernameElement) return null;
+
+    const trackedBadge = this.injectedBadges.get(usernameElement);
+    if (trackedBadge?.isConnected) {
+      return trackedBadge;
+    }
+
+    const adjacentBadge = usernameElement.nextElementSibling;
+    if (adjacentBadge?.classList.contains(CONSTANTS.CSS_CLASSES.BADGE_CONTAINER)) {
+      this.injectedBadges.set(usernameElement, adjacentBadge);
+      return adjacentBadge;
+    }
+
+    return null;
   },
 
   /**
@@ -134,13 +159,12 @@ const BadgeInjector = {
   remove(usernameElement) {
     if (!usernameElement) return;
 
-    const badge = usernameElement.parentElement?.querySelector(
-      `.${CONSTANTS.CSS_CLASSES.BADGE_CONTAINER}`
-    );
+    const badge = this.get(usernameElement);
 
     if (badge) {
       badge.remove();
     }
+    this.injectedBadges.delete(usernameElement);
   },
 
   /**

@@ -27,6 +27,9 @@ const SETTING_IDS = [
  * Initialize popup
  */
 async function init() {
+  document.getElementById('extensionVersion').textContent =
+    `v${chrome.runtime.getManifest().version}`;
+
   // Load current settings
   await loadSettings();
 
@@ -38,11 +41,25 @@ async function init() {
 }
 
 /**
+ * Send a message and surface background-handler errors to the popup.
+ */
+async function sendMessage(message) {
+  const response = await chrome.runtime.sendMessage(message);
+  if (!response) {
+    throw new Error('Background service did not respond');
+  }
+  if (response.error) {
+    throw new Error(response.error);
+  }
+  return response;
+}
+
+/**
  * Load settings from background
  */
 async function loadSettings() {
   try {
-    const response = await chrome.runtime.sendMessage({
+    const response = await sendMessage({
       type: MESSAGE_TYPES.GET_SETTINGS
     });
 
@@ -67,7 +84,7 @@ async function loadSettings() {
  */
 async function loadCacheStats() {
   try {
-    const response = await chrome.runtime.sendMessage({
+    const response = await sendMessage({
       type: MESSAGE_TYPES.GET_CACHE_STATS
     });
 
@@ -120,7 +137,7 @@ async function handleSettingChange(event) {
   const value = checkbox.checked;
 
   try {
-    await chrome.runtime.sendMessage({
+    await sendMessage({
       type: MESSAGE_TYPES.UPDATE_SETTINGS,
       settings: { [settingId]: value }
     });
@@ -146,7 +163,7 @@ async function handleClearCache() {
   if (!confirmed) return;
 
   try {
-    await chrome.runtime.sendMessage({
+    await sendMessage({
       type: MESSAGE_TYPES.CLEAR_CACHE
     });
 
@@ -166,7 +183,7 @@ async function handleClearCache() {
  */
 async function handleExport() {
   try {
-    const response = await chrome.runtime.sendMessage({
+    const response = await sendMessage({
       type: MESSAGE_TYPES.EXPORT_DATA
     });
 
@@ -215,7 +232,7 @@ async function handleImport(event) {
       throw new Error('Invalid data format');
     }
 
-    const response = await chrome.runtime.sendMessage({
+    const response = await sendMessage({
       type: MESSAGE_TYPES.IMPORT_DATA,
       data: data
     });

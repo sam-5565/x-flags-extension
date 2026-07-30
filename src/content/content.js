@@ -36,13 +36,21 @@
             setTimeout(() => reject(new Error('Timeout')), 10000)
           )
         ]);
+
+        if (!response) {
+          throw new Error('Background service did not respond');
+        }
+        if (response.error) {
+          throw new Error(response.error);
+        }
+
         return response;
       } catch (error) {
         const isInvalidContext = error.message?.includes('Extension context invalidated') ||
                                   error.message?.includes('Extension context was invalidated');
 
         if (isInvalidContext && attempt < maxRetries) {
-          console.log('[XFlag] Extension context invalidated, retrying...');
+          XFlagLogger.log('[XFlag] Extension context invalidated, retrying...');
           // Small delay before retry
           await new Promise(resolve => setTimeout(resolve, 100));
           continue;
@@ -71,7 +79,7 @@
     // If we're in a rate-limited state from X, skip API calls
     if (now < rateLimitedUntil) {
       const waitMins = Math.ceil((rateLimitedUntil - now) / 60000);
-      console.log(`[XFlag] Rate limited by X, ${waitMins} minutes remaining`);
+      XFlagLogger.log(`[XFlag] Rate limited by X, ${waitMins} minutes remaining`);
       return false;
     }
 
@@ -96,11 +104,11 @@
       // Reset time is in Unix epoch seconds
       rateLimitedUntil = parseInt(resetTime, 10) * 1000;
       const waitMins = Math.ceil((rateLimitedUntil - Date.now()) / 60000);
-      console.log(`[XFlag] Rate limited by X, will reset in ${waitMins} minutes`);
+      XFlagLogger.log(`[XFlag] Rate limited by X, will reset in ${waitMins} minutes`);
     } else {
       // If no header, back off for 5 minutes
       rateLimitedUntil = Date.now() + (5 * 60 * 1000);
-      console.log(`[XFlag] Rate limited by X, backing off for 5 minutes`);
+      XFlagLogger.log(`[XFlag] Rate limited by X, backing off for 5 minutes`);
     }
   }
 
@@ -124,11 +132,11 @@
       // Get CSRF token from cookie
       const csrfToken = getCsrfToken();
       if (!csrfToken) {
-        console.log(`[XFlag] No CSRF token found, cannot fetch API`);
+        XFlagLogger.log(`[XFlag] No CSRF token found, cannot fetch API`);
         return null;
       }
 
-      console.log(`[XFlag] Fetching AboutAccountQuery for ${username}`);
+      XFlagLogger.log(`[XFlag] Fetching AboutAccountQuery for ${username}`);
 
       const response = await fetch(url, {
         credentials: 'include',
@@ -145,18 +153,18 @@
 
       // Handle rate limiting from X
       if (response.status === 429) {
-        console.log(`[XFlag] Got 429 rate limited for ${username}`);
+        XFlagLogger.log(`[XFlag] Got 429 rate limited for ${username}`);
         handleRateLimitResponse(response);
         return null;
       }
 
       if (!response.ok) {
-        console.log(`[XFlag] AboutAccountQuery failed for ${username}: ${response.status}`);
+        XFlagLogger.log(`[XFlag] AboutAccountQuery failed for ${username}: ${response.status}`);
         return null;
       }
 
       const json = await response.json();
-      console.log(`[XFlag] AboutAccountQuery response for ${username}:`, JSON.stringify(json).substring(0, 300));
+      XFlagLogger.log(`[XFlag] AboutAccountQuery response for ${username}:`, JSON.stringify(json).substring(0, 300));
 
       return parseAboutAccountResponse(json, username);
 
@@ -185,16 +193,16 @@
 
     try {
       // Log full response structure for debugging
-      console.log(`[XFlag] Full API response for ${username}:`, JSON.stringify(json, null, 2).substring(0, 2000));
+      XFlagLogger.log(`[XFlag] Full API response for ${username}:`, JSON.stringify(json, null, 2).substring(0, 2000));
 
       const userResult = json?.data?.user_result_by_screen_name?.result;
 
       if (!userResult) {
-        console.log(`[XFlag] No user data in response for ${username}. Data keys:`, json?.data ? Object.keys(json.data) : 'no data');
+        XFlagLogger.log(`[XFlag] No user data in response for ${username}. Data keys:`, json?.data ? Object.keys(json.data) : 'no data');
         return null;
       }
 
-      console.log(`[XFlag] userResult keys for ${username}:`, Object.keys(userResult));
+      XFlagLogger.log(`[XFlag] userResult keys for ${username}:`, Object.keys(userResult));
 
       if (userResult.__typename === 'UserUnavailable') {
         data.isSuspended = true;
@@ -203,7 +211,7 @@
 
       const aboutProfile = userResult.about_profile;
 
-      console.log(`[XFlag] about_profile for ${username}:`, aboutProfile ? JSON.stringify(aboutProfile) : 'null');
+      XFlagLogger.log(`[XFlag] about_profile for ${username}:`, aboutProfile ? JSON.stringify(aboutProfile) : 'null');
 
       if (aboutProfile) {
         // "Account based in"
@@ -212,7 +220,7 @@
             country: aboutProfile.account_based_in,
             raw: aboutProfile.account_based_in
           };
-          console.log(`[XFlag] Found basedIn: ${aboutProfile.account_based_in}`);
+          XFlagLogger.log(`[XFlag] Found basedIn: ${aboutProfile.account_based_in}`);
         }
 
         // "Connected via" - field is called "source" in the API
@@ -226,13 +234,13 @@
             country: region,
             raw: source
           };
-          console.log(`[XFlag] Found connectedVia (source): ${source}`);
+          XFlagLogger.log(`[XFlag] Found connectedVia (source): ${source}`);
         }
 
         // VPN warning - field is "location_accurate" (false means VPN detected)
         if (aboutProfile.location_accurate === false) {
           data.hasVpnWarning = true;
-          console.log(`[XFlag] Found VPN warning (location_accurate: false)`);
+          XFlagLogger.log(`[XFlag] Found VPN warning (location_accurate: false)`);
         }
 
         // Join date from description or other fields
@@ -241,7 +249,7 @@
           if (joinMatch) {
             data.joinedMonth = joinMatch[1];
             data.joinedYear = parseInt(joinMatch[2], 10);
-            console.log(`[XFlag] Found joined from description: ${data.joinedMonth} ${data.joinedYear}`);
+            XFlagLogger.log(`[XFlag] Found joined from description: ${data.joinedMonth} ${data.joinedYear}`);
           }
         }
       }
@@ -259,7 +267,7 @@
           if (monthMatch) {
             data.joinedMonth = monthMatch[1];
           }
-          console.log(`[XFlag] Found joined from legacy.created_at: ${data.joinedMonth} ${data.joinedYear}`);
+          XFlagLogger.log(`[XFlag] Found joined from legacy.created_at: ${data.joinedMonth} ${data.joinedYear}`);
         }
         if (legacy.name) data.displayName = legacy.name;
         if (legacy.protected) data.isProtected = true;
@@ -269,9 +277,9 @@
       if (userResult.is_blue_verified) data.isVerified = true;
 
       // Log all available fields for debugging
-      console.log(`[XFlag] aboutProfile fields:`, aboutProfile ? Object.keys(aboutProfile) : 'none');
-      console.log(`[XFlag] legacy fields:`, legacy ? Object.keys(legacy) : 'none');
-      console.log(`[XFlag] Parsed data for ${username}:`, JSON.stringify(data));
+      XFlagLogger.log(`[XFlag] aboutProfile fields:`, aboutProfile ? Object.keys(aboutProfile) : 'none');
+      XFlagLogger.log(`[XFlag] legacy fields:`, legacy ? Object.keys(legacy) : 'none');
+      XFlagLogger.log(`[XFlag] Parsed data for ${username}:`, JSON.stringify(data));
       return data;
 
     } catch (error) {
@@ -286,52 +294,53 @@
   async function init() {
     if (initialized) return;
 
-    console.log('[XFlag] Initializing content script...');
+    XFlagLogger.log('[XFlag] Initializing content script...');
 
     try {
       // Use default settings initially, load from background async
       settings = CONSTANTS.DISPLAY_DEFAULTS;
-      console.log('[XFlag] Using default settings');
+      XFlagLogger.log('[XFlag] Using default settings');
 
       // Try to load settings from background (non-blocking)
       chrome.runtime.sendMessage({ type: MESSAGE_TYPES.GET_SETTINGS })
         .then(response => {
           if (response && response.settings) {
             settings = response.settings;
+            XFlagLogger.setEnabled(settings.debugMode);
             BadgeInjector.updateSettings(settings);
-            console.log('[XFlag] Loaded settings from background');
+            XFlagLogger.log('[XFlag] Loaded settings from background');
           }
         })
-        .catch(err => console.log('[XFlag] Could not load settings:', err));
+        .catch(err => XFlagLogger.log('[XFlag] Could not load settings:', err));
 
       // Initialize badge injector with settings
       BadgeInjector.init(settings);
-      console.log('[XFlag] Badge injector initialized');
+      XFlagLogger.log('[XFlag] Badge injector initialized');
 
       // Initialize DOM observer with callback
       DOMObserver.init(handleNewUsernames);
-      console.log('[XFlag] DOM observer initialized');
+      XFlagLogger.log('[XFlag] DOM observer initialized');
 
       // Initialize profile scraper (scrapes data when visiting profile pages)
       // This loads cached profiles from background into memory
       await ProfileScraper.init();
-      console.log('[XFlag] Profile scraper initialized');
+      XFlagLogger.log('[XFlag] Profile scraper initialized');
 
       // Start observing
       DOMObserver.start();
-      console.log('[XFlag] DOM observer started');
+      XFlagLogger.log('[XFlag] DOM observer started');
 
       // Listen for settings updates
       chrome.runtime.onMessage.addListener(handleMessage);
 
       initialized = true;
-      console.log('[XFlag] Content script initialized successfully');
+      XFlagLogger.log('[XFlag] Content script initialized successfully');
 
       // Debug: manually scan after a short delay to catch initial content
       setTimeout(() => {
-        console.log('[XFlag] Running initial scan...');
+        XFlagLogger.log('[XFlag] Running initial scan...');
         const found = UsernameFinder.findAll();
-        console.log('[XFlag] Found usernames:', found.length, found.map(f => f.username));
+        XFlagLogger.log('[XFlag] Found usernames:', found.length, found.map(f => f.username));
         if (found.length > 0) {
           handleNewUsernames(found, true);
         }
@@ -348,6 +357,7 @@
   function handleMessage(message, sender, sendResponse) {
     if (message.type === MESSAGE_TYPES.SETTINGS_UPDATED) {
       settings = message.settings;
+      XFlagLogger.setEnabled(settings.debugMode);
       BadgeInjector.updateSettings(settings);
 
       // Refresh all badges with new settings
@@ -366,7 +376,7 @@
     if (!usernameItems || usernameItems.length === 0) return;
 
     for (const item of usernameItems) {
-      UsernameFinder.markProcessed(item.element);
+      UsernameFinder.markProcessed(item.element, item.username);
       const username = item.username.toLowerCase();
 
       // Check cache first - show immediately if we have data
@@ -414,7 +424,7 @@
         }
 
         // Request background script to fetch
-        const response = await chrome.runtime.sendMessage({
+        const response = await sendMessageWithRetry({
           type: 'FETCH_PROFILE_WITH_AUTH',
           username: username,
           csrfToken: csrfToken
@@ -430,11 +440,15 @@
           const badge = BadgeInjector.createBadge(data);
           if (badge && element.isConnected) {
             BadgeInjector.inject(element, badge);
+          } else {
+            BadgeInjector.remove(element);
           }
+          container.removeEventListener('mouseenter', fetchOnHover);
         } else {
           // No data available - show dash
           container.innerHTML = '<span class="x-flag-no-data" title="No location data available">—</span>';
           container.style.opacity = '0.4';
+          container.removeEventListener('mouseenter', fetchOnHover);
         }
       } catch (error) {
         console.error('[XFlag] Hover fetch error:', error);
@@ -444,7 +458,7 @@
       }
     };
 
-    container.addEventListener('mouseenter', fetchOnHover, { once: true });
+    container.addEventListener('mouseenter', fetchOnHover);
 
     return container;
   }
@@ -463,9 +477,7 @@
 
     for (const element of processedElements) {
       // Find the badge container
-      const badge = element.parentElement?.querySelector(
-        `.${CONSTANTS.CSS_CLASSES.BADGE_CONTAINER}`
-      );
+      const badge = BadgeInjector.get(element);
 
       if (badge) {
         // Get username from nearby link or stored attribute
@@ -484,7 +496,7 @@
     const usernames = [...new Set(items.map(i => i.username.toLowerCase()))];
 
     try {
-      const response = await chrome.runtime.sendMessage({
+      const response = await sendMessageWithRetry({
         type: MESSAGE_TYPES.GET_CACHED_PROFILES,
         usernames: usernames
       });
@@ -493,7 +505,15 @@
 
       for (const item of items) {
         const profileData = cached[item.username.toLowerCase()];
-        BadgeInjector.update(item.element, profileData);
+        if (profileData && !profileData.isNegative) {
+          BadgeInjector.update(item.element, profileData);
+        } else {
+          const placeholder = createHoverPlaceholder(
+            item.element,
+            item.username.toLowerCase()
+          );
+          BadgeInjector.inject(item.element, placeholder);
+        }
       }
 
     } catch (error) {
@@ -544,7 +564,7 @@
   const urlObserver = new MutationObserver(() => {
     if (location.href !== lastUrl) {
       lastUrl = location.href;
-      console.log('[XFlag] URL changed, rescanning...');
+      XFlagLogger.log('[XFlag] URL changed, rescanning...');
       DOMObserver.scan();
     }
   });
