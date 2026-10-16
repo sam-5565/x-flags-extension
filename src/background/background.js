@@ -113,7 +113,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
               return { rateLimited: true, resetAt: error.resetAt };
             }
             if (error.authFailed) {
-              return { authFailed: true, error: error.message };
+              // Not under `error`, so the content script can tell it apart
+              return { authFailed: true, message: error.message };
             }
             throw error;
           }
@@ -138,7 +139,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           // entry: that would replace the hover placeholder with a year-only
           // badge and the flag could never be loaded for that user.
           const createIfMissing = Boolean(data.basedIn || data.connectedVia || data.isSuspended);
-          const entry = await cacheManager.merge(username.toLowerCase(), data, { createIfMissing });
+          const entry = await cacheManager.merge(username.toLowerCase(), data, {
+            createIfMissing,
+            // Suspensions get lifted; don't remember one for a month
+            ttl: data.isSuspended === true ? cacheManager.UNAVAILABLE_TTL : null
+          });
           return { data: entry };
         }
 

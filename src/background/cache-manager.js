@@ -172,19 +172,28 @@ class CacheManager {
    * @param {Object} [options]
    * @param {boolean} [options.createIfMissing=true] When false, data is only
    *   merged into an existing positive entry; returns null otherwise.
+   * @param {number} [options.ttl] TTL to apply when the merge adds location
+   *   data or creates the entry (defaults to the normal TTL)
    * @returns {Object|null} The stored entry
    */
-  async merge(username, data, { createIfMissing = true } = {}) {
+  async merge(username, data, { createIfMissing = true, ttl: ttlOption = null } = {}) {
     await this.init();
 
     const existing = await this.get(username);
     if (!existing || existing.isNegative) {
       if (!createIfMissing) return null;
-      return this.set(username, data, Boolean(data.isVerified), false);
+      return this.set(username, data, Boolean(data.isVerified), false, ttlOption);
     }
 
     const merged = { ...existing };
     for (const [key, value] of Object.entries(data)) {
+      // An explicit isSuspended:false (sent only after seeing a live
+      // profile) clears an earlier suspension; other falsy values mean
+      // "not detected" and keep what we had.
+      if (key === 'isSuspended' && value === false) {
+        merged.isSuspended = false;
+        continue;
+      }
       if (value === null || value === undefined || value === false) continue;
       merged[key] = value;
     }
@@ -200,7 +209,7 @@ class CacheManager {
       (data.connectedVia && !existing.connectedVia) ||
       (data.isSuspended && !existing.isSuspended);
     const remaining = existing.fetchedAt + existing.ttl - Date.now();
-    const ttl = addsLocation ? null : Math.max(remaining, 60 * 1000);
+    const ttl = addsLocation ? ttlOption : Math.max(remaining, 60 * 1000);
 
     return this.set(username, merged, Boolean(merged.isVerified), false, ttl);
   }

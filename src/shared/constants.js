@@ -77,8 +77,7 @@ const CONSTANTS = {
   // Data attributes
   DATA_ATTRS: {
     USERNAME: 'data-x-flag-username',
-    PROCESSED: 'data-x-flag-processed',
-    TIMESTAMP: 'data-x-flag-ts'
+    PROCESSED: 'data-x-flag-processed'
   }
 };
 

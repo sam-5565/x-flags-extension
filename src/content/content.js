@@ -132,6 +132,13 @@
       if (stopped) return;
 
       BadgeInjector.init(settings);
+
+      // Firefox injects an updated extension's content scripts into tabs
+      // that are already open. Badges left by the previous copy have dead
+      // event listeners, so start from a clean page.
+      BadgeInjector.removeAll();
+      UsernameFinder.clearProcessed();
+
       DOMObserver.init(handleNewUsernames);
       ProfileScraper.init(handleScrapedProfile);
       chrome.runtime.onMessage.addListener(handleMessage);
@@ -318,6 +325,8 @@
 
     const load = () => {
       clearTimeout(hoverTimer);
+      // The hover timer can fire after React or a re-render removed us
+      if (!container.isConnected) return;
       loadProfile(username);
     };
 
@@ -348,7 +357,12 @@
    * for that user on the page.
    */
   function loadProfile(username) {
-    if (profiles.has(username) || activeFetches.has(username)) {
+    if (profiles.has(username)) {
+      // Already known (e.g. a stale placeholder was clicked): just redraw
+      renderUser(username);
+      return undefined;
+    }
+    if (activeFetches.has(username)) {
       return activeFetches.get(username);
     }
 
@@ -368,7 +382,7 @@
         return { rateLimited: true, resetAt: response.resetAt };
       }
       if (response.authFailed) {
-        throw new Error(response.error || 'Sign in to X to load country info');
+        throw new Error(response.message || 'Sign in to X to load country info');
       }
       return { data: response.data };
     })();
@@ -379,6 +393,13 @@
     fetchPromise
       .then(result => {
         activeFetches.delete(username);
+
+        // Data may have arrived another way meanwhile (e.g. the user opened
+        // this profile); don't replace it with a status placeholder.
+        if (profiles.has(username)) {
+          renderUser(username);
+          return;
+        }
 
         if (result.rateLimited) {
           const until = result.resetAt
@@ -404,6 +425,11 @@
       .catch(error => {
         activeFetches.delete(username);
         XFlagLogger.log('[XFlag] Fetch error:', error.message);
+
+        if (profiles.has(username)) {
+          renderUser(username);
+          return;
+        }
 
         if (stopped) {
           // Don't leave a spinner behind after the extension was reloaded

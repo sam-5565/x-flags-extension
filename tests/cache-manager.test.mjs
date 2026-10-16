@@ -291,3 +291,25 @@ test('entries without a usable timestamp are dropped on load', async () => {
   assert.equal(await cache.get('legacy_user'), null);
   assert.equal((await cache.get('good_user')).joinedYear, 2010);
 });
+
+test('an explicit isSuspended:false from a live profile clears a suspension', async () => {
+  const { cache } = createCacheManager();
+  await cache.set('back_user', { isSuspended: true, basedIn: { country: 'Peru', raw: 'Peru' } });
+
+  const stillSuspended = await cache.merge('back_user', { joinedYear: 2015 });
+  assert.equal(stillSuspended.isSuspended, true);
+
+  const cleared = await cache.merge('back_user', { isSuspended: false, joinedYear: 2015 });
+  assert.equal(cleared.isSuspended, false);
+  assert.equal(cleared.basedIn.country, 'Peru');
+});
+
+test('merge applies the given TTL when creating or adding location data', async () => {
+  const { cache } = createCacheManager();
+  const created = await cache.merge('susp_user', { isSuspended: true }, { ttl: 5000 });
+  assert.equal(created.ttl, 5000);
+
+  await cache.set('year_user', { joinedYear: 2012 });
+  const located = await cache.merge('year_user', { basedIn: { country: 'Chile', raw: 'Chile' } }, { ttl: 7000 });
+  assert.equal(located.ttl, 7000);
+});

@@ -66,7 +66,13 @@ const ProfileScraper = {
       const scraped = this._scrapeProfileData(username);
       if (scraped) {
         this._notify(username, scraped);
-      } else if (attempt < this.SCRAPE_ATTEMPTS) {
+      }
+
+      // On the About page the header renders before the location rows, so
+      // keep looking until they show up (or we run out of attempts).
+      const onAboutPage = /\/about\/?$/.test(window.location.pathname);
+      const needsLocation = onAboutPage && !(scraped?.basedIn || scraped?.connectedVia);
+      if ((!scraped || needsLocation) && attempt < this.SCRAPE_ATTEMPTS) {
         this._scheduleScrape(username, attempt + 1);
       }
     }, this.SCRAPE_DELAY_MS);
@@ -83,6 +89,8 @@ const ProfileScraper = {
       return null;
     }
 
+    // isSuspended is only sent when known, so the cache can tell "not
+    // suspended" apart from "didn't check".
     const data = {
       username: username,
       basedIn: null,
@@ -91,24 +99,31 @@ const ProfileScraper = {
       joinedMonth: null,
       isProtected: false,
       isVerified: false,
-      isSuspended: false,
       displayName: null
     };
 
     try {
-      // Suspended profiles show an empty state instead of a header
+      // Only trust the header if it belongs to the profile in the URL.
+      const header = this._findProfileHeader(primaryColumn, username);
+
+      // Suspended profiles show an empty state instead of a timeline. Make
+      // sure the page is really about this user (the handle appears in the
+      // header or title area) before believing a possibly stale empty state
+      // from the previous profile during navigation.
       const emptyStates = primaryColumn.querySelectorAll('[data-testid="emptyState"]');
+      const mentionsUser = header ||
+        (primaryColumn.innerText || '').toLowerCase().includes(`@${username}`);
       for (const emptyState of emptyStates) {
-        if (/account suspended/i.test(emptyState.textContent || '')) {
+        if (mentionsUser && /account suspended/i.test(emptyState.textContent || '')) {
           data.isSuspended = true;
           return data;
         }
       }
 
-      // Only trust the header if it belongs to the profile in the URL.
-      const header = this._findProfileHeader(primaryColumn, username);
-
       if (header) {
+        // A rendered, verified header means the account is live again.
+        data.isSuspended = false;
+
         const nameSpan = header.querySelector('span');
         if (nameSpan) {
           data.displayName = nameSpan.textContent?.trim() || null;

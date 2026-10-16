@@ -7,7 +7,7 @@ const UsernameFinder = {
   foundElements: new WeakSet(),
 
   // Regex to validate username format
-  usernameRegex: /^@?[A-Za-z0-9_]{1,15}$/,
+  usernameRegex: /^[A-Za-z0-9_]{1,15}$/,
 
   /**
    * Find all username elements on the page
@@ -168,27 +168,34 @@ const UsernameFinder = {
    * Find username in profile header
    */
   _findUsernamesInProfileHeader(header) {
-    const results = [];
+    // Display names may themselves look like "@SomeBrand", so prefer the
+    // span matching the handle in the URL and otherwise take the last
+    // "@..." span (X renders the handle after the display name).
+    const pathUser = (location.pathname.match(/^\/([A-Za-z0-9_]{1,15})(?:\/|$)/) || [])[1];
+    let chosen = null;
 
-    // Look for the @ username text
-    const spans = header.querySelectorAll('span');
-    for (const span of spans) {
+    for (const span of header.querySelectorAll('span')) {
       const text = span.textContent?.trim();
-      if (text && text.startsWith('@')) {
-        const username = text.substring(1);
-        if (this._isValidUsername(username)) {
-          results.push({
-            element: span,
-            username: username,
-            context: 'profile-header'
-          });
-          this.foundElements.add(span);
-          break; // Only need one from header
-        }
+      if (!text || !text.startsWith('@')) continue;
+
+      const username = text.substring(1);
+      if (!this._isValidUsername(username)) continue;
+
+      if (pathUser && username.toLowerCase() === pathUser.toLowerCase()) {
+        chosen = { span, username };
+        break;
       }
+      chosen = { span, username };
     }
 
-    return results;
+    if (!chosen) return [];
+
+    this.foundElements.add(chosen.span);
+    return [{
+      element: chosen.span,
+      username: chosen.username,
+      context: 'profile-header'
+    }];
   },
 
   /**
@@ -309,7 +316,6 @@ const UsernameFinder = {
    */
   markProcessed(element, username) {
     element.setAttribute(CONSTANTS.DATA_ATTRS.PROCESSED, 'true');
-    element.setAttribute(CONSTANTS.DATA_ATTRS.TIMESTAMP, Date.now().toString());
     if (username) {
       element.setAttribute(CONSTANTS.DATA_ATTRS.USERNAME, username.toLowerCase());
     }
@@ -329,7 +335,6 @@ const UsernameFinder = {
     const processed = document.querySelectorAll(`[${CONSTANTS.DATA_ATTRS.PROCESSED}]`);
     for (const el of processed) {
       el.removeAttribute(CONSTANTS.DATA_ATTRS.PROCESSED);
-      el.removeAttribute(CONSTANTS.DATA_ATTRS.TIMESTAMP);
       el.removeAttribute(CONSTANTS.DATA_ATTRS.USERNAME);
     }
     this.foundElements = new WeakSet();

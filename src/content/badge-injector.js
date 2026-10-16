@@ -46,6 +46,7 @@ const BadgeInjector = {
 
     if (profileData?.isSuspended) {
       container.appendChild(this._createSuspendedBadge());
+      this._addTooltipListeners(container);
       return container;
     }
 
@@ -54,9 +55,9 @@ const BadgeInjector = {
       if (profileData?.notFound) {
         // Don't show anything for not found
         return null;
-      } else {
-        container.appendChild(this._createErrorBadge());
       }
+      container.appendChild(this._createErrorBadge());
+      this._addTooltipListeners(container);
       return container;
     }
 
@@ -145,15 +146,12 @@ const BadgeInjector = {
   },
 
   /**
-   * Create a loading badge
+   * Remove every badge on the page (used when a fresh copy of the content
+   * script starts in a tab that an older copy already decorated).
    */
-  createLoadingBadge() {
-    const container = document.createElement('span');
-    container.className = `${CONSTANTS.CSS_CLASSES.BADGE_CONTAINER} ${CONSTANTS.CSS_CLASSES.LOADING}`;
-    const spinner = document.createElement('span');
-    spinner.className = 'x-flag-spinner';
-    container.appendChild(spinner);
-    return container;
+  removeAll() {
+    document.querySelectorAll(`.${CONSTANTS.CSS_CLASSES.BADGE_CONTAINER}`).forEach(b => b.remove());
+    this._hideTooltip();
   },
 
   /**
@@ -182,8 +180,10 @@ const BadgeInjector = {
   get(usernameElement) {
     if (!usernameElement) return null;
 
+    // A tracked badge counts only while it still sits right after its
+    // element; React may have moved either one.
     const trackedBadge = this.injectedBadges.get(usernameElement);
-    if (trackedBadge?.isConnected) {
+    if (trackedBadge?.isConnected && trackedBadge.previousElementSibling === usernameElement) {
       return trackedBadge;
     }
 
@@ -367,16 +367,38 @@ const BadgeInjector = {
     tooltip.setAttribute('role', 'tooltip');
     tooltip.textContent = tooltipText;
 
-    // Position below the icon, kept inside the viewport horizontally
-    const rect = target.getBoundingClientRect();
-    const center = rect.left + rect.width / 2;
-    const margin = 8;
+    // A fixed box with only `left` set shrinks to the space right of that
+    // point, which near the viewport edge is one word per line. Give it its
+    // natural width first, measure, then place it fully inside the viewport
+    // and below the icon (or above when there's no room below).
     tooltip.style.position = 'fixed';
-    tooltip.style.left = `${Math.min(Math.max(center, margin), window.innerWidth - margin)}px`;
-    tooltip.style.top = `${rect.bottom + 5}px`;
-    tooltip.style.transform = 'translateX(-50%)';
-
+    tooltip.style.width = 'max-content';
+    tooltip.style.left = '0px';
+    tooltip.style.top = '0px';
+    tooltip.style.visibility = 'hidden';
     document.body.appendChild(tooltip);
+
+    const rect = target.getBoundingClientRect();
+    const width = tooltip.offsetWidth;
+    const height = tooltip.offsetHeight;
+    const margin = 8;
+    const center = rect.left + rect.width / 2;
+    const maxLeft = Math.max(margin, window.innerWidth - margin - width);
+    const left = Math.min(Math.max(center - width / 2, margin), maxLeft);
+
+    let top = rect.bottom + 6;
+    let above = false;
+    if (top + height > window.innerHeight - margin && rect.top - height - 6 >= margin) {
+      top = rect.top - height - 6;
+      above = true;
+    }
+
+    tooltip.style.left = `${left}px`;
+    tooltip.style.top = `${top}px`;
+    // Keep the arrow under/over the icon even when the box was shifted
+    tooltip.style.setProperty('--x-flag-arrow-left', `${Math.min(Math.max(center - left, 10), width - 10)}px`);
+    tooltip.classList.toggle('x-flag-tooltip-above', above);
+    tooltip.style.visibility = '';
 
     this.activeTooltip = tooltip;
     this.tooltipOwner = target;

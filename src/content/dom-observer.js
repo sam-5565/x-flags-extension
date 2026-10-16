@@ -42,9 +42,14 @@ const DOMObserver = {
 
     // Observe the whole body: X swaps out <main> when navigating between
     // some pages, and modals/hovercards render outside it.
+    // href/text changes catch links React updates in place for a different
+    // user instead of replacing the node.
     this.observer.observe(document.body, {
       childList: true,
-      subtree: true
+      subtree: true,
+      attributes: true,
+      attributeFilter: ['href'],
+      characterData: true
     });
 
     XFlagLogger.log('[DOMObserver] Started observing');
@@ -73,6 +78,11 @@ const DOMObserver = {
       window.removeEventListener('scroll', this.scrollHandler);
       this.scrollHandler = null;
     }
+
+    this.isScrolling = false;
+    this.processScheduled = false;
+    this.debounceTimer = null;
+    this.scrollTimer = null;
 
     XFlagLogger.log('[DOMObserver] Stopped observing');
   },
@@ -117,6 +127,10 @@ const DOMObserver = {
    */
   _hasForeignMutation(mutations) {
     for (const mutation of mutations) {
+      if (mutation.type !== 'childList') {
+        if (!this._isOwnNode(mutation.target)) return true;
+        continue;
+      }
       for (const list of [mutation.addedNodes, mutation.removedNodes]) {
         for (const node of list) {
           if (!this._isOwnNode(node)) {

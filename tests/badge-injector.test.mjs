@@ -47,11 +47,15 @@ class FakeElement {
     this.attributes.set(name, value);
   }
 
-  querySelectorAll() {
-    return [];
+  querySelectorAll(selector) {
+    if (selector !== '[data-tooltip]') return [];
+    return this.children.filter(child => child.attributes.has('data-tooltip'));
   }
 
-  addEventListener() {}
+  addEventListener(type) {
+    this.listeners = this.listeners || [];
+    this.listeners.push(type);
+  }
 }
 
 function loadBadgeInjector() {
@@ -148,4 +152,15 @@ test('hidden settings produce no badge', () => {
     basedIn: { country: 'France' },
     joinedYear: 2020
   }), null);
+});
+
+test('suspended and error badges get tooltip listeners like other badges', () => {
+  const badgeInjector = loadBadgeInjector();
+  badgeInjector.init({});
+
+  const suspended = badgeInjector.createBadge({ isSuspended: true });
+  assert.deepEqual(suspended.children[0].listeners, ['mouseenter', 'mouseleave']);
+
+  const failed = badgeInjector.createBadge({ error: 'boom' });
+  assert.deepEqual(failed.children[0].listeners, ['mouseenter', 'mouseleave']);
 });
