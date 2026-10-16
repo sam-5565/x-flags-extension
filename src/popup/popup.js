@@ -39,6 +39,40 @@ async function init() {
   if (IS_TAB) {
     document.body.classList.add('in-tab');
   }
+
+  await checkSiteAccess();
+}
+
+const SITE_ORIGINS = ['https://x.com/*', 'https://twitter.com/*'];
+
+/**
+ * Firefox lets users revoke a Manifest V3 extension's site access at any
+ * time; without it neither the content script nor the lookups work. Show a
+ * notice with a button to grant it back.
+ */
+async function checkSiteAccess() {
+  const notice = document.getElementById('accessNotice');
+  if (!notice || !chrome.permissions?.contains) return;
+
+  try {
+    const granted = await chrome.permissions.contains({ origins: SITE_ORIGINS });
+    notice.hidden = granted;
+  } catch (error) {
+    notice.hidden = true;
+  }
+}
+
+async function handleGrantAccess() {
+  try {
+    const granted = await chrome.permissions.request({ origins: SITE_ORIGINS });
+    if (granted) {
+      document.getElementById('accessNotice').hidden = true;
+      showToast('Access to x.com granted - reload your X tabs', 'success');
+    }
+  } catch (error) {
+    console.error('Error requesting site access:', error);
+    showToast('Could not request site access', 'error');
+  }
 }
 
 /**
@@ -141,6 +175,9 @@ function setupEventListeners() {
 
   // Clear cache button
   document.getElementById('clearCache').addEventListener('click', handleClearCache);
+
+  // Site access (Firefox can revoke it)
+  document.getElementById('grantAccess')?.addEventListener('click', handleGrantAccess);
 
   // Export button
   document.getElementById('exportData').addEventListener('click', handleExport);

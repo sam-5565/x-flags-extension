@@ -2,25 +2,8 @@
  * Constants used throughout the extension
  */
 
+// Cache TTLs live in CacheManager and request pacing in ProfileFetcher.
 const CONSTANTS = {
-  // Cache settings - aggressive caching to minimize API calls
-  CACHE: {
-    DEFAULT_TTL: 30 * 24 * 60 * 60 * 1000,     // 30 days
-    VERIFIED_TTL: 90 * 24 * 60 * 60 * 1000,    // 90 days
-    NEGATIVE_TTL: 7 * 24 * 60 * 60 * 1000,     // 7 days for failed lookups
-    MAX_ENTRIES: 50000,                         // 50k entries
-    STORAGE_KEY: 'profileCache'
-  },
-
-  // Rate limiting
-  RATE_LIMIT: {
-    MIN_DELAY: 500,                             // Min ms between requests
-    MAX_DELAY: 30000,                           // Max backoff delay
-    BACKOFF_MULTIPLIER: 2,
-    MAX_CONCURRENT: 3,                          // Max concurrent fetches
-    QUEUE_PROCESS_INTERVAL: 100                 // Ms between queue checks
-  },
-
   // DOM observation
   OBSERVER: {
     DEBOUNCE_MS: 100,                           // Debounce mutations

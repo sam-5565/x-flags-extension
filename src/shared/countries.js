@@ -405,6 +405,7 @@ const COUNTRY_ALIASES = {
   CX: ['christmas island'],
   EH: ['western sahara'],
   FK: ['falkland islands', 'falklands'],
+  FM: ['micronesia federated states of', 'federated states of micronesia'],
   FO: ['faroe islands', 'faroes'],
   GB: ['northern ireland', 'united kingdom of great britain and northern ireland'],
   GF: ['french guiana'],
@@ -460,9 +461,14 @@ for (const [code, names] of Object.entries(COUNTRY_ALIASES)) {
   const flag = COUNTRY_CODES[code] || flagFromCode(code);
   COUNTRY_CODES[code] = flag;
   for (const name of names) {
-    if (!COUNTRY_FLAGS[name]) COUNTRY_FLAGS[name] = flag;
+    if (!Object.hasOwn(COUNTRY_FLAGS, name)) COUNTRY_FLAGS[name] = flag;
   }
 }
+
+// Lookup tables keyed by normalizeLookupKey() output. Built without a
+// prototype so names like "constructor" can't resolve to Object methods.
+const FLAG_LOOKUP = Object.create(null);
+const CODE_LOOKUP = Object.create(null);
 
 // Trailing words in X's "Connected via" values, e.g. "Europe Android App" or
 // "United States App Store".
@@ -479,14 +485,24 @@ const SOURCE_SUFFIX_PATTERN =
 function normalizeLookupKey(input) {
   return String(input)
     .normalize('NFD')
-    .replace(/[̀-ͯ]/g, '')
+    .replace(/[̀-ͯ]/g, '')      // strip diacritics
     .toLowerCase()
+    .replace(/\([^)]*\)/g, ' ')          // "Myanmar (Burma)"
     .replace(/&/g, ' and ')
-    .replace(/['’`.]/g, '')
-    .replace(/[^a-z0-9\s-]/g, ' ')
+    .replace(/['’`.]/g, '')          // "Côte d'Ivoire", "St. Lucia"
+    .replace(/[^a-z0-9\s]/g, ' ')         // hyphens, commas, slashes -> space
     .replace(/\s+/g, ' ')
     .trim()
-    .replace(/^the /, '');
+    .replace(/,? the$/, '')               // "Bahamas, The"
+    .replace(/^the /, '')
+    .replace(/^st /, 'saint ');
+}
+
+for (const [name, flag] of Object.entries(COUNTRY_FLAGS)) {
+  FLAG_LOOKUP[normalizeLookupKey(name)] = flag;
+}
+for (const [code, flag] of Object.entries(COUNTRY_CODES)) {
+  CODE_LOOKUP[code] = flag;
 }
 
 /**
@@ -522,13 +538,13 @@ function getFlag(input) {
 
   // Try ISO code lookup first for exact two-letter input ("GB", "us").
   if (/^[A-Za-z]{2}$/.test(trimmed)) {
-    const byCode = COUNTRY_CODES[trimmed.toUpperCase()];
-    if (byCode) return COUNTRY_FLAGS[trimmed.toLowerCase()] || byCode;
+    const byCode = CODE_LOOKUP[trimmed.toUpperCase()];
+    if (byCode) return FLAG_LOOKUP[trimmed.toLowerCase()] || byCode;
   }
 
   const key = normalizeLookupKey(trimmed);
-  if (COUNTRY_FLAGS[key]) {
-    return COUNTRY_FLAGS[key];
+  if (FLAG_LOOKUP[key]) {
+    return FLAG_LOOKUP[key];
   }
 
   // Try again without "App Store" / "Android App" style suffixes.
@@ -549,7 +565,7 @@ function getFlag(input) {
  */
 function getCountryCode(input) {
   const flag = getFlag(input);
-  if (!flag) return null;
+  if (typeof flag !== 'string' || !flag) return null;
 
   const codePoints = Array.from(flag).map(char => char.codePointAt(0));
 

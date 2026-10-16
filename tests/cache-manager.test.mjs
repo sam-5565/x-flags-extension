@@ -209,3 +209,85 @@ test('imported entries are reduced to known, well-typed fields', async () => {
   assert.equal(entry.isNegative, false);
   assert.equal('extraField' in entry, false);
 });
+
+test('flush writes changes made while an earlier write was in flight', async () => {
+  const storage = {};
+  let release;
+  const context = vm.createContext({
+    Blob, setTimeout, clearTimeout,
+    chrome: { storage: { local: {
+      async get() { return {}; },
+      set(values) {
+        // First write blocks until released, later writes complete immediately
+        if (!release) {
+          return new Promise(resolve => { release = () => { Object.assign(storage, values); resolve(); }; });
+        }
+        Object.assign(storage, values);
+        return Promise.resolve();
+      },
+      async remove() {}
+    } } },
+    console, self: {}
+  });
+  vm.runInContext(constantsSource, context);
+  vm.runInContext(cacheManagerSource, context);
+  const cache = new context.self.CacheManager();
+  cache.PERSIST_DELAY = 1;
+
+  await cache.set('first_user', { joinedYear: 2010 });
+  await new Promise(resolve => setTimeout(resolve, 10)); // debounced write now in flight
+
+  const flushed = cache.import({ version: 1, entries: {
+    second_user: { joinedYear: 2011, fetchedAt: Date.now(), ttl: 60_000 }
+  } });
+  await new Promise(resolve => setTimeout(resolve, 5));
+  release();
+  assert.equal(await flushed, 1);
+  assert.deepEqual(Object.keys(storage.profileCache).sort(), ['first_user', 'second_user']);
+});
+
+test('merging header data keeps the existing deadline; new location data renews it', async () => {
+  const { cache } = createCacheManager();
+
+  await cache.set('partial_user', { joinedYear: 2014 }, false, false, 60 * 60 * 1000);
+  const kept = await cache.merge('partial_user', { joinedYear: 2014, displayName: 'P' });
+  assert.ok(kept.ttl <= 60 * 60 * 1000, 'ttl must not grow');
+  assert.ok(kept.ttl > 59 * 60 * 1000, 'remaining lifetime should be preserved');
+
+  const renewed = await cache.merge('partial_user', { basedIn: { country: 'Chile', raw: 'Chile' } });
+  assert.equal(renewed.ttl, cache.DEFAULT_TTL);
+  assert.equal(renewed.basedIn.country, 'Chile');
+});
+
+test('imports that cannot fit in storage are rejected', async () => {
+  const { cache } = createCacheManager();
+  cache.QUOTA_BYTES = 200;
+  await assert.rejects(
+    cache.import({ version: 1, entries: {
+      big_user: { joinedYear: 2010, fetchedAt: Date.now(), ttl: 60_000, displayName: 'x'.repeat(300) }
+    } }),
+    /too large/
+  );
+});
+
+test('import clamps immortal timestamps and oversize strings', async () => {
+  const { cache } = createCacheManager();
+  await cache.import({ version: 1, entries: {
+    immortal_user: { fetchedAt: 4e15, ttl: 1e300, joinedYear: 2010,
+      basedIn: { country: 'A'.repeat(500), raw: 'B'.repeat(500) } }
+  } });
+  const entry = await cache.get('immortal_user');
+  assert.ok(entry.fetchedAt <= Date.now());
+  assert.equal(entry.ttl, cache.DEFAULT_TTL);
+  assert.equal(entry.basedIn.country.length, 64);
+});
+
+test('entries without a usable timestamp are dropped on load', async () => {
+  const { cache, storage } = createCacheManager();
+  storage.profileCache = {
+    legacy_user: { joinedYear: 2009 },
+    good_user: { joinedYear: 2010, fetchedAt: Date.now(), ttl: 60_000 }
+  };
+  assert.equal(await cache.get('legacy_user'), null);
+  assert.equal((await cache.get('good_user')).joinedYear, 2010);
+});

@@ -66,3 +66,19 @@ test('country codes identify countries but not regions', () => {
   assert.equal(getCountryCode('South Asia'), null);
   assert.equal(getCountryCode('Atlantis'), null);
 });
+
+test('object prototype names never resolve to a flag', () => {
+  for (const name of ['constructor', 'Constructor', '__proto__', 'hasOwnProperty', 'toString']) {
+    assert.equal(getFlag(name), null, name);
+    assert.equal(getCountryCode(name), null, name);
+  }
+});
+
+test('punctuated and reordered country names resolve', () => {
+  assert.equal(getFlag('Congo - Kinshasa'), '🇨🇩');
+  assert.equal(getFlag('Myanmar (Burma)'), '🇲🇲');
+  assert.equal(getFlag('St. Helena'), '🇸🇭');
+  assert.equal(getFlag('Bahamas, The'), '🇧🇸');
+  assert.equal(getFlag('Guinea Bissau'), '🇬🇼');
+  assert.equal(getFlag('Micronesia, Federated States of'), '🇫🇲');
+});

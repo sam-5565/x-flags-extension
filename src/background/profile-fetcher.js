@@ -31,6 +31,10 @@ const USERNAME_PATTERN = /^[a-z0-9_]{1,15}$/;
 const DEFAULT_RATE_LIMIT_BACKOFF = 5 * 60 * 1000;
 const MAX_RATE_LIMIT_BACKOFF = 60 * 60 * 1000;
 const RATE_LIMIT_STORAGE_KEY = 'rateLimitedUntil';
+// Chrome stops an extension service worker whose fetch takes over 30s, and
+// after 30s without any extension API call. Keep both well inside that.
+const FETCH_TIMEOUT_MS = 20000;
+const KEEPALIVE_INTERVAL_MS = 20000;
 
 class RateLimitError extends Error {
   constructor(resetAt) {
@@ -237,6 +241,7 @@ class ProfileFetcher {
     this.lastRequestAt = 0;
     this.rateLimitedUntil = 0;
     this.rateLimitLoaded = null;
+    this.keepAliveTimer = null;
   }
 
   /**
@@ -275,6 +280,7 @@ class ProfileFetcher {
    */
   _enqueue(task) {
     this.queueLength++;
+    this._startKeepAlive();
     const run = this.queueTail.then(async () => {
       try {
         // Fail queued lookups immediately once X has rate-limited us,
@@ -289,10 +295,30 @@ class ProfileFetcher {
         return await task();
       } finally {
         this.queueLength--;
+        if (this.queueLength === 0) this._stopKeepAlive();
       }
     });
     this.queueTail = run.catch(() => {});
     return run;
+  }
+
+  /**
+   * A long queue of lookups makes no extension API calls on its own (only
+   * fetch and timers), so touch a cheap one periodically to keep the service
+   * worker from being shut down with responses still pending.
+   */
+  _startKeepAlive() {
+    if (this.keepAliveTimer || !this.sessionStorage?.get) return;
+    this.keepAliveTimer = setInterval(() => {
+      Promise.resolve(this.sessionStorage.get(RATE_LIMIT_STORAGE_KEY)).catch(() => {});
+    }, KEEPALIVE_INTERVAL_MS);
+  }
+
+  _stopKeepAlive() {
+    if (this.keepAliveTimer) {
+      clearInterval(this.keepAliveTimer);
+      this.keepAliveTimer = null;
+    }
   }
 
   async _fetchAndCache(username, csrfToken) {
@@ -385,7 +411,10 @@ class ProfileFetcher {
   async _getJson(url, headers, label) {
     let response;
     try {
-      response = await this.fetchImpl(url, { credentials: 'include', headers });
+      const signal = typeof AbortSignal !== 'undefined' && AbortSignal.timeout
+        ? AbortSignal.timeout(FETCH_TIMEOUT_MS)
+        : undefined;
+      response = await this.fetchImpl(url, { credentials: 'include', headers, signal });
     } catch (error) {
       console.error(`[ProfileFetcher] ${label} network error:`, error);
       return null;

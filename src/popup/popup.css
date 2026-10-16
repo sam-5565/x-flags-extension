@@ -285,3 +285,7 @@ body.in-tab {
 body.in-tab .popup-container {
   width: 360px;
 }
+
+.section-notice[hidden] {
+  display: none;
+}

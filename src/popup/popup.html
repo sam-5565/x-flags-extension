@@ -13,6 +13,14 @@
     </header>
 
     <main class="main">
+      <!-- Site access (shown only when x.com permission is missing) -->
+      <section class="section section-notice" id="accessNotice" hidden>
+        <p class="status-note">
+          X Flags doesn't have access to x.com, so no flags can be shown.
+        </p>
+        <button id="grantAccess" class="btn btn-secondary">Allow access to x.com</button>
+      </section>
+
       <!-- Display Options -->
       <section class="section">
         <h2 class="section-title">Display Options</h2>

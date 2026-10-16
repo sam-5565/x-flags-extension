@@ -19,6 +19,8 @@ function loadModules() {
     Blob,
     setTimeout,
     clearTimeout,
+    setInterval,
+    clearInterval,
     URL,
     chrome: {
       storage: {

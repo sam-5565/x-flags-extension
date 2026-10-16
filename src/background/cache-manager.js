@@ -17,6 +17,7 @@ class CacheManager {
     this.PARTIAL_TTL = 6 * 60 * 60 * 1000;           // 6 hours when one query failed
     // chrome.storage.local is limited to ~10 MB without unlimitedStorage.
     this.MAX_ENTRIES = 20000;
+    this.QUOTA_BYTES = 10 * 1024 * 1024;
     this.PERSIST_DELAY = 1500;                        // Batch storage writes
 
     // In-memory cache for quick access
@@ -43,16 +44,27 @@ class CacheManager {
       const data = await chrome.storage.local.get([this.STORAGE_KEY, this.STATS_KEY]);
       const cached = data[this.STORAGE_KEY] || {};
 
-      // Load into memory cache
-      for (const [username, entry] of Object.entries(cached)) {
-        this.memoryCache.set(username.toLowerCase(), entry);
+      // Load into memory cache, dropping entries from older versions that
+      // lack a usable timestamp (they would otherwise never expire).
+      let dropped = 0;
+      for (const [username, rawEntry] of Object.entries(cached)) {
+        const entry = this._sanitizeEntry(rawEntry, username);
+        if (entry) {
+          this.memoryCache.set(username.toLowerCase(), entry);
+        } else {
+          dropped++;
+        }
       }
 
       this.initialized = true;
 
       // Older versions allowed far more entries than storage can hold.
+      const before = this.memoryCache.size;
       while (this.memoryCache.size > this.MAX_ENTRIES) {
         await this._evictLRU();
+      }
+      if (dropped > 0 || this.memoryCache.size !== before) {
+        this._schedulePersist();
       }
 
       XFlagLogger.log(`[CacheManager] Initialized with ${this.memoryCache.size} entries`);
@@ -181,7 +193,16 @@ class CacheManager {
     delete merged.ttl;
     delete merged.isNegative;
 
-    return this.set(username, merged, Boolean(merged.isVerified), false);
+    // Only new location data earns a fresh lifetime. Otherwise keep the
+    // existing deadline, so a profile visit neither restarts a 30-day TTL nor
+    // promotes a short-lived partial entry (which still needs its flag).
+    const addsLocation = (data.basedIn && !existing.basedIn) ||
+      (data.connectedVia && !existing.connectedVia) ||
+      (data.isSuspended && !existing.isSuspended);
+    const remaining = existing.fetchedAt + existing.ttl - Date.now();
+    const ttl = addsLocation ? null : Math.max(remaining, 60 * 1000);
+
+    return this.set(username, merged, Boolean(merged.isVerified), false, ttl);
   }
 
   /**
@@ -279,6 +300,14 @@ class CacheManager {
 
     await this.init();
 
+    // Refuse files that can't fit next to the existing cache instead of
+    // evicting the user's real entries to make room for them.
+    const incomingBytes = new Blob([JSON.stringify(data.entries)]).size;
+    const currentBytes = new Blob([JSON.stringify(Object.fromEntries(this.memoryCache))]).size;
+    if (incomingBytes + currentBytes > this.QUOTA_BYTES) {
+      throw new Error('Import is too large for the browser\'s extension storage');
+    }
+
     let imported = 0;
     for (const [username, rawEntry] of Object.entries(data.entries)) {
       const normalizedUsername = username.toLowerCase();
@@ -302,7 +331,9 @@ class CacheManager {
       }
     }
 
-    await this.flush();
+    if (!(await this.flush())) {
+      throw new Error('Imported data could not be saved');
+    }
     XFlagLogger.log(`[CacheManager] Imported ${imported} entries`);
 
     return imported;
@@ -318,43 +349,47 @@ class CacheManager {
       return null;
     }
 
-    const fetchedAt = Number(entry.fetchedAt);
-    const ttl = Number(entry.ttl || this.DEFAULT_TTL);
+    // Clamp so a bad timestamp or a huge TTL can't make an entry immortal.
+    const now = Date.now();
+    const fetchedAt = Math.min(Number(entry.fetchedAt), now);
+    const ttl = Math.min(Number(entry.ttl || this.DEFAULT_TTL), this.DEFAULT_TTL);
     if (!Number.isFinite(fetchedAt) || !Number.isFinite(ttl) || ttl <= 0) {
       return null;
     }
 
+    const text = (value, max) =>
+      typeof value === 'string' && value.trim() ? value.trim().slice(0, max) : null;
+
     const place = (value) => {
-      if (typeof value === 'string' && value.trim()) {
-        return { country: value.trim(), raw: value.trim() };
+      if (typeof value === 'string') {
+        const country = text(value, 64);
+        return country ? { country, raw: country } : null;
       }
-      if (value && typeof value === 'object' && typeof value.country === 'string' &&
-          value.country.trim()) {
-        return {
-          country: value.country.trim(),
-          raw: typeof value.raw === 'string' && value.raw.trim() ? value.raw.trim() : value.country.trim()
-        };
+      if (value && typeof value === 'object') {
+        const country = text(value.country, 64);
+        return country ? { country, raw: text(value.raw, 64) || country } : null;
       }
       return null;
     };
 
     const year = Number(entry.joinedYear);
     const changes = Number(entry.usernameChanges);
+    const storedName = text(entry.username, 15);
 
     return {
-      username: typeof entry.username === 'string' ? entry.username : username,
+      username: storedName && /^[A-Za-z0-9_]{1,15}$/.test(storedName) ? storedName : username,
       basedIn: place(entry.basedIn),
       connectedVia: place(entry.connectedVia),
       hasVpnWarning: entry.hasVpnWarning === true,
       joinedYear: Number.isInteger(year) && year >= 2006 && year <= 2100 ? year : null,
-      joinedMonth: typeof entry.joinedMonth === 'string' ? entry.joinedMonth.slice(0, 12) : null,
+      joinedMonth: text(entry.joinedMonth, 12),
       isProtected: entry.isProtected === true,
       isVerified: entry.isVerified === true,
       isSuspended: entry.isSuspended === true,
-      displayName: typeof entry.displayName === 'string' ? entry.displayName.slice(0, 100) : null,
+      displayName: text(entry.displayName, 100),
       usernameChanges: Number.isInteger(changes) && changes >= 0 ? changes : null,
       fetchedAt,
-      lastAccessed: Number(entry.lastAccessed) || fetchedAt,
+      lastAccessed: Math.min(Number(entry.lastAccessed) || fetchedAt, now),
       ttl,
       isNegative: entry.isNegative === true
     };
@@ -393,27 +428,31 @@ class CacheManager {
   }
 
   /**
-   * Write any pending changes to storage immediately.
+   * Write the current cache to storage now.
+   * A write that is already in flight may have taken its snapshot before the
+   * latest changes, so wait for it and then write again.
+   * @returns {Promise<boolean>} Whether the write succeeded
    */
   async flush() {
     if (this.persistTimer) {
       clearTimeout(this.persistTimer);
       this.persistTimer = null;
-      await this._persistCache();
-    } else if (this.persistPromise) {
-      await this.persistPromise;
-    } else {
-      await this._persistCache();
     }
+    if (this.persistPromise) {
+      await this.persistPromise;
+    }
+    return this._persistCache();
   }
 
   /**
    * Persist memory cache to storage
+   * @returns {Promise<boolean>} Whether the write succeeded
    */
   async _persistCache(attempt = 0) {
     try {
       const cacheObj = Object.fromEntries(this.memoryCache);
       await chrome.storage.local.set({ [this.STORAGE_KEY]: cacheObj });
+      return true;
     } catch (error) {
       console.error('[CacheManager] Persist error:', error);
 
@@ -421,8 +460,9 @@ class CacheManager {
       if (/quota/i.test(error.message || '') && attempt < 5 && this.memoryCache.size > 0) {
         await this._evictLRU();
         await this._evictLRU(); // Evict more aggressively
-        await this._persistCache(attempt + 1);
+        return this._persistCache(attempt + 1);
       }
+      return false;
     }
   }
 }
