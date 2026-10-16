@@ -88,7 +88,13 @@ const DOMObserver = {
    * Setup mutation observer
    */
   _setupMutationObserver() {
-    this.observer = new MutationObserver(() => {
+    this.observer = new MutationObserver((mutations) => {
+      // Our own badge and tooltip insertions also fire mutation records;
+      // ignore batches that contain nothing else.
+      if (!this._hasForeignMutation(mutations)) {
+        return;
+      }
+
       // Debounce rapid mutations
       if (this.debounceTimer) {
         clearTimeout(this.debounceTimer);
@@ -104,6 +110,32 @@ const DOMObserver = {
         this._processNewContent();
       }, CONSTANTS.OBSERVER.DEBOUNCE_MS);
     });
+  },
+
+  /**
+   * Whether any added or removed node in this batch is not one of ours
+   */
+  _hasForeignMutation(mutations) {
+    for (const mutation of mutations) {
+      for (const list of [mutation.addedNodes, mutation.removedNodes]) {
+        for (const node of list) {
+          if (!this._isOwnNode(node)) {
+            return true;
+          }
+        }
+      }
+    }
+    return false;
+  },
+
+  _isOwnNode(node) {
+    if (node.nodeType !== Node.ELEMENT_NODE) {
+      // Text changes inside our badges happen within our own elements
+      return Boolean(node.parentElement?.closest?.(`.${CONSTANTS.CSS_CLASSES.BADGE_CONTAINER}`));
+    }
+    return node.classList.contains(CONSTANTS.CSS_CLASSES.BADGE_CONTAINER) ||
+           node.classList.contains(CONSTANTS.CSS_CLASSES.TOOLTIP) ||
+           Boolean(node.closest(`.${CONSTANTS.CSS_CLASSES.BADGE_CONTAINER}`));
   },
 
   /**
@@ -164,6 +196,9 @@ const DOMObserver = {
    * Actually do the processing
    */
   _doProcess() {
+    // Badges whose username element React has since removed
+    BadgeInjector.removeOrphans();
+
     const newElements = UsernameFinder.findNew();
 
     if (newElements.length === 0) {

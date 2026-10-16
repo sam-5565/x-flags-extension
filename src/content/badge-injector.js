@@ -70,7 +70,7 @@ const BadgeInjector = {
     const hasMismatch = this._checkMismatch(profileData);
 
     // Based-in flag
-    const basedIn = profileData.basedIn?.country;
+    const basedIn = this._placeName(profileData.basedIn);
     if (basedIn && this.settings.showBasedIn) {
       const flag = getFlag(basedIn);
       const tooltip = `Account based in: ${basedIn}`;
@@ -80,10 +80,13 @@ const BadgeInjector = {
     }
 
     // Connected-via flag
-    const connectedVia = profileData.connectedVia?.country || profileData.connectedVia?.raw;
+    const connectedVia = this._placeName(profileData.connectedVia);
     if (connectedVia && this.settings.showConnectedVia) {
       const flag = getFlag(connectedVia);
-      const tooltip = `Connected via: ${profileData.connectedVia.raw || connectedVia}`;
+      const rawSource = typeof profileData.connectedVia.raw === 'string'
+        ? profileData.connectedVia.raw
+        : connectedVia;
+      const tooltip = `Connected via: ${rawSource}`;
       elements.push(flag
         ? this._createFlagSpan(flag, tooltip, 'connected-via', hasMismatch)
         : this._createTextLabel(connectedVia, tooltip, 'connected-via', hasMismatch));
@@ -113,6 +116,32 @@ const BadgeInjector = {
     this._addTooltipListeners(container);
 
     return container;
+  },
+
+  /**
+   * Country/region text from a {country, raw} place, or null if unusable
+   */
+  _placeName(place) {
+    if (!place || typeof place !== 'object') return null;
+    const name = typeof place.country === 'string' && place.country.trim()
+      ? place.country.trim()
+      : (typeof place.raw === 'string' ? place.raw.trim() : '');
+    return name || null;
+  },
+
+  /**
+   * Remove badges whose username element is gone. React removes nodes it
+   * owns but leaves our sibling badge behind, which would otherwise sit
+   * next to unrelated content.
+   */
+  removeOrphans() {
+    const badges = document.querySelectorAll(`.${CONSTANTS.CSS_CLASSES.BADGE_CONTAINER}`);
+    for (const badge of badges) {
+      const owner = badge.previousElementSibling;
+      if (!owner || !owner.hasAttribute(CONSTANTS.DATA_ATTRS.USERNAME)) {
+        badge.remove();
+      }
+    }
   },
 
   /**
@@ -279,7 +308,7 @@ const BadgeInjector = {
   _createSuspendedBadge() {
     const span = document.createElement('span');
     span.className = CONSTANTS.CSS_CLASSES.ERROR;
-    this._setLabel(span, 'Account suspended');
+    this._setLabel(span, 'Account suspended or unavailable');
     span.textContent = '🚫';
     return span;
   },
@@ -306,10 +335,8 @@ const BadgeInjector = {
       return false;
     }
 
-    const basedInCode = getCountryCode(profileData.basedIn.country);
-    const connectedViaCode = getCountryCode(
-      profileData.connectedVia.country || profileData.connectedVia.raw
-    );
+    const basedInCode = getCountryCode(this._placeName(profileData.basedIn));
+    const connectedViaCode = getCountryCode(this._placeName(profileData.connectedVia));
 
     return Boolean(basedInCode && connectedViaCode && basedInCode !== connectedViaCode);
   },

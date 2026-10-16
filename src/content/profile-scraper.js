@@ -181,31 +181,34 @@ const ProfileScraper = {
     const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
     const labels = /^(Account based in|Connected via|Joined|Verified|Date joined|Username)/i;
 
-    const valueAfter = (label) => {
-      for (let i = 0; i < lines.length; i++) {
-        const line = lines[i];
-        if (!line.toLowerCase().startsWith(label)) continue;
+    // X renders each About row as a label element followed by a value
+    // element, so in innerText the label is a whole line and the value is
+    // the next one. Requiring that (rather than a prefix match) keeps tweets
+    // like "Connected via Bluetooth today" from being read as data.
+    const valueAfter = (label, valuePattern) => {
+      for (let i = 0; i < lines.length - 1; i++) {
+        if (lines[i].toLowerCase() !== label) continue;
 
-        // Value on the same line ("Account based in United States")...
-        const sameLine = line.slice(label.length).trim();
-        if (sameLine) return sameLine;
-
-        // ...or on the next line
         const nextLine = lines[i + 1];
-        if (nextLine && !labels.test(nextLine) && nextLine.length < 60) {
+        if (!labels.test(nextLine) && valuePattern.test(nextLine)) {
           return nextLine;
         }
       }
       return null;
     };
 
-    const basedIn = valueAfter('account based in');
+    // Country or region names: letters, spaces and light punctuation
+    const placePattern = /^[\p{L}\p{M}][\p{L}\p{M}\s.'\u2019,&()-]{1,48}$/u;
+    // "United States App Store", "Europe Android App", "Web"
+    const sourcePattern = /^[\p{L}\p{M}][\p{L}\p{M}\s.'\u2019&()-]{0,48}$/u;
+
+    const basedIn = valueAfter('account based in', placePattern);
     if (basedIn) {
       result.basedIn = { country: basedIn, raw: basedIn };
       XFlagLogger.log('[ProfileScraper] Found basedIn:', basedIn);
     }
 
-    const connectedVia = valueAfter('connected via');
+    const connectedVia = valueAfter('connected via', sourcePattern);
     if (connectedVia) {
       result.connectedVia = {
         country: normalizeCountryName(connectedVia),

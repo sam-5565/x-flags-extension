@@ -211,10 +211,12 @@ const UsernameFinder = {
 
     // Verify this looks like a username link (not just any link to a user page)
     // Username links typically contain the username text or are in specific containers
-    const linkText = link.textContent?.trim();
+    const linkText = link.textContent?.trim().toLowerCase();
+    const lowerUsername = username.toLowerCase();
 
     // Check if link text is the username (with or without @)
-    if (linkText === username || linkText === `@${username}`) {
+    if (linkText === `@${lowerUsername}` ||
+        (linkText === lowerUsername && !this._hasHandleLinkNearby(link, lowerUsername))) {
       return {
         element: link,
         username: username,
@@ -236,6 +238,26 @@ const UsernameFinder = {
   },
 
   /**
+   * Whether a separate "@username" link for the same user sits in the same
+   * user block. When a display name equals the handle (common), both links
+   * match the username text and we'd otherwise add two badges.
+   */
+  _hasHandleLinkNearby(link, lowerUsername) {
+    const container = link.closest(
+      '[data-testid="UserCell"], [data-testid="User-Name"], [data-testid="HoverCard"], article'
+    ) || link.parentElement;
+    if (!container) return false;
+
+    const handle = `@${lowerUsername}`;
+    for (const other of container.querySelectorAll('a[href^="/"]')) {
+      if (other !== link && other.textContent?.trim().toLowerCase() === handle) {
+        return true;
+      }
+    }
+    return false;
+  },
+
+  /**
    * Process a generic link that might be a username
    */
   _processGenericLink(link) {
@@ -254,8 +276,10 @@ const UsernameFinder = {
     }
 
     // The link text should be the username or @username
-    const linkText = link.textContent?.trim();
-    if (linkText !== username && linkText !== `@${username}`) {
+    const linkText = link.textContent?.trim().toLowerCase();
+    const lowerUsername = username.toLowerCase();
+    if (linkText !== `@${lowerUsername}` &&
+        (linkText !== lowerUsername || this._hasHandleLinkNearby(link, lowerUsername))) {
       return null;
     }
 

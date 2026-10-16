@@ -112,6 +112,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             if (error.rateLimited) {
               return { rateLimited: true, resetAt: error.resetAt };
             }
+            if (error.authFailed) {
+              return { authFailed: true, error: error.message };
+            }
             throw error;
           }
         }
@@ -131,7 +134,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             return { error: 'Invalid profile data' };
           }
           XFlagLogger.log('[Background] Received scraped data for:', username, data);
-          const entry = await cacheManager.merge(username.toLowerCase(), data);
+          // A profile header alone (join date, name) must not create an
+          // entry: that would replace the hover placeholder with a year-only
+          // badge and the flag could never be loaded for that user.
+          const createIfMissing = Boolean(data.basedIn || data.connectedVia || data.isSuspended);
+          const entry = await cacheManager.merge(username.toLowerCase(), data, { createIfMissing });
           return { data: entry };
         }
 

@@ -27,7 +27,9 @@
   // Delay before a hover triggers a network request, so sweeping the mouse
   // across the timeline doesn't fire a burst of lookups.
   const HOVER_INTENT_MS = 250;
-  const FETCH_TIMEOUT_MS = 60000;
+  // Lookups queue up one per second in the background, so a burst of hovers
+  // can legitimately take a while.
+  const FETCH_TIMEOUT_MS = 120000;
   const MESSAGE_TIMEOUT_MS = 10000;
 
   /**
@@ -124,6 +126,10 @@
       } catch (error) {
         XFlagLogger.log('[XFlag] Could not load settings, using defaults:', error.message);
       }
+
+      // The extension was reloaded before we got going; this copy of the
+      // script can't talk to the background any more.
+      if (stopped) return;
 
       BadgeInjector.init(settings);
       DOMObserver.init(handleNewUsernames);
@@ -361,6 +367,9 @@
       if (response.rateLimited) {
         return { rateLimited: true, resetAt: response.resetAt };
       }
+      if (response.authFailed) {
+        throw new Error(response.error || 'Sign in to X to load country info');
+      }
       return { data: response.data };
     })();
 
@@ -394,8 +403,18 @@
       })
       .catch(error => {
         activeFetches.delete(username);
-        if (stopped) return;
         XFlagLogger.log('[XFlag] Fetch error:', error.message);
+
+        if (stopped) {
+          // Don't leave a spinner behind after the extension was reloaded
+          showPlaceholderState(username, {
+            icon: '⚠️',
+            className: CONSTANTS.CSS_CLASSES.ERROR,
+            title: 'X Flags was updated - refresh the page to reconnect'
+          });
+          return;
+        }
+
         showPlaceholderState(username, {
           icon: '⚠️',
           className: CONSTANTS.CSS_CLASSES.ERROR,

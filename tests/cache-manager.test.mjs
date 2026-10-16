@@ -150,3 +150,62 @@ test('negative entries are returned until they expire', async () => {
   assert.equal(entry.isNegative, true);
   assert.equal(entry.ttl, cache.NEGATIVE_TTL);
 });
+
+test('merge without createIfMissing leaves absent and negative entries alone', async () => {
+  const { cache } = createCacheManager();
+
+  assert.equal(
+    await cache.merge('nobody', { joinedYear: 2012 }, { createIfMissing: false }),
+    null
+  );
+  assert.equal(await cache.get('nobody'), null);
+
+  await cache.set('negative_user', {}, false, true);
+  assert.equal(
+    await cache.merge('negative_user', { joinedYear: 2012 }, { createIfMissing: false }),
+    null
+  );
+  assert.equal((await cache.get('negative_user')).isNegative, true);
+
+  await cache.set('known_user', { basedIn: { country: 'Peru', raw: 'Peru' } });
+  const merged = await cache.merge('known_user', { joinedYear: 2012 }, { createIfMissing: false });
+  assert.equal(merged.joinedYear, 2012);
+  assert.equal(merged.basedIn.country, 'Peru');
+});
+
+test('explicit TTL overrides the default', async () => {
+  const { cache } = createCacheManager();
+  const entry = await cache.set('short_user', { joinedYear: 2020 }, false, false, 1234);
+  assert.equal(entry.ttl, 1234);
+});
+
+test('imported entries are reduced to known, well-typed fields', async () => {
+  const { cache } = createCacheManager();
+  const now = Date.now();
+
+  await cache.import({
+    version: 1,
+    entries: {
+      odd_user: {
+        fetchedAt: now,
+        basedIn: 'France',
+        connectedVia: { country: 42 },
+        joinedYear: '2015',
+        isVerified: 'yes',
+        hasVpnWarning: true,
+        extraField: { nested: true },
+        isNegative: 'false'
+      }
+    }
+  });
+
+  const entry = await cache.get('odd_user');
+  assert.equal(entry.basedIn.country, 'France');
+  assert.equal(entry.basedIn.raw, 'France');
+  assert.equal(entry.connectedVia, null);
+  assert.equal(entry.joinedYear, 2015);
+  assert.equal(entry.isVerified, false);
+  assert.equal(entry.hasVpnWarning, true);
+  assert.equal(entry.isNegative, false);
+  assert.equal('extraField' in entry, false);
+});

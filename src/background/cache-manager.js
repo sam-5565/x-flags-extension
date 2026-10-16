@@ -12,10 +12,12 @@ class CacheManager {
     // Cache settings - long-term caching to minimize API calls
     this.DEFAULT_TTL = 30 * 24 * 60 * 60 * 1000;     // 30 days for successful lookups
     this.VERIFIED_TTL = 30 * 24 * 60 * 60 * 1000;    // 30 days for verified accounts
-    this.NEGATIVE_TTL = 7 * 24 * 60 * 60 * 1000;     // 7 days for failed lookups (retry sooner)
+    this.NEGATIVE_TTL = 24 * 60 * 60 * 1000;         // 1 day when X has no data yet
+    this.UNAVAILABLE_TTL = 3 * 24 * 60 * 60 * 1000;  // 3 days for suspended/unavailable
+    this.PARTIAL_TTL = 6 * 60 * 60 * 1000;           // 6 hours when one query failed
     // chrome.storage.local is limited to ~10 MB without unlimitedStorage.
     this.MAX_ENTRIES = 20000;
-    this.PERSIST_DELAY = 500;                         // Batch storage writes
+    this.PERSIST_DELAY = 1500;                        // Batch storage writes
 
     // In-memory cache for quick access
     this.memoryCache = new Map();
@@ -112,15 +114,18 @@ class CacheManager {
    * @param {Object} data Profile data
    * @param {boolean} isVerified Whether account is verified (longer TTL)
    * @param {boolean} isNegative Whether this is a "not found" result
+   * @param {number} [ttlOverride] Explicit TTL in ms
    */
-  async set(username, data, isVerified = false, isNegative = false) {
+  async set(username, data, isVerified = false, isNegative = false, ttlOverride = null) {
     await this.init();
 
     const key = username.toLowerCase();
     const now = Date.now();
 
     let ttl = this.DEFAULT_TTL;
-    if (isNegative) {
+    if (ttlOverride > 0) {
+      ttl = ttlOverride;
+    } else if (isNegative) {
       ttl = this.NEGATIVE_TTL;
     } else if (isVerified) {
       ttl = this.VERIFIED_TTL;
@@ -152,12 +157,17 @@ class CacheManager {
    * Used for DOM-scraped data, which is often less complete than API data.
    * @param {string} username
    * @param {Object} data Partial profile data
+   * @param {Object} [options]
+   * @param {boolean} [options.createIfMissing=true] When false, data is only
+   *   merged into an existing positive entry; returns null otherwise.
+   * @returns {Object|null} The stored entry
    */
-  async merge(username, data) {
+  async merge(username, data, { createIfMissing = true } = {}) {
     await this.init();
 
-    const existing = this.memoryCache.get(username.toLowerCase());
+    const existing = await this.get(username);
     if (!existing || existing.isNegative) {
+      if (!createIfMissing) return null;
       return this.set(username, data, Boolean(data.isVerified), false);
     }
 
@@ -270,13 +280,15 @@ class CacheManager {
     await this.init();
 
     let imported = 0;
-    for (const [username, entry] of Object.entries(data.entries)) {
+    for (const [username, rawEntry] of Object.entries(data.entries)) {
       const normalizedUsername = username.toLowerCase();
 
-      if (!/^[a-z0-9_]{1,15}$/.test(normalizedUsername) ||
-          !entry || typeof entry !== 'object' || Array.isArray(entry)) {
+      if (!/^[a-z0-9_]{1,15}$/.test(normalizedUsername)) {
         continue;
       }
+
+      const entry = this._sanitizeEntry(rawEntry, username);
+      if (!entry) continue;
 
       if (this.memoryCache.size >= this.MAX_ENTRIES &&
           !this.memoryCache.has(normalizedUsername)) {
@@ -284,17 +296,8 @@ class CacheManager {
       }
 
       // Skip expired entries
-      const fetchedAt = Number(entry.fetchedAt);
-      const ttl = Number(entry.ttl || this.DEFAULT_TTL);
-      if (Number.isFinite(fetchedAt) && Number.isFinite(ttl) && ttl > 0 &&
-          Date.now() - fetchedAt <= ttl) {
-        this.memoryCache.set(normalizedUsername, {
-          ...entry,
-          username: entry.username || username,
-          fetchedAt,
-          lastAccessed: Number(entry.lastAccessed) || fetchedAt,
-          ttl
-        });
+      if (Date.now() - entry.fetchedAt <= entry.ttl) {
+        this.memoryCache.set(normalizedUsername, entry);
         imported++;
       }
     }
@@ -303,6 +306,58 @@ class CacheManager {
     XFlagLogger.log(`[CacheManager] Imported ${imported} entries`);
 
     return imported;
+  }
+
+  /**
+   * Reduce an imported entry to known fields with the expected types, so a
+   * hand-edited or foreign file can't put unexpected shapes into the cache.
+   * @returns {Object|null} Clean entry, or null if unusable
+   */
+  _sanitizeEntry(entry, username) {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+      return null;
+    }
+
+    const fetchedAt = Number(entry.fetchedAt);
+    const ttl = Number(entry.ttl || this.DEFAULT_TTL);
+    if (!Number.isFinite(fetchedAt) || !Number.isFinite(ttl) || ttl <= 0) {
+      return null;
+    }
+
+    const place = (value) => {
+      if (typeof value === 'string' && value.trim()) {
+        return { country: value.trim(), raw: value.trim() };
+      }
+      if (value && typeof value === 'object' && typeof value.country === 'string' &&
+          value.country.trim()) {
+        return {
+          country: value.country.trim(),
+          raw: typeof value.raw === 'string' && value.raw.trim() ? value.raw.trim() : value.country.trim()
+        };
+      }
+      return null;
+    };
+
+    const year = Number(entry.joinedYear);
+    const changes = Number(entry.usernameChanges);
+
+    return {
+      username: typeof entry.username === 'string' ? entry.username : username,
+      basedIn: place(entry.basedIn),
+      connectedVia: place(entry.connectedVia),
+      hasVpnWarning: entry.hasVpnWarning === true,
+      joinedYear: Number.isInteger(year) && year >= 2006 && year <= 2100 ? year : null,
+      joinedMonth: typeof entry.joinedMonth === 'string' ? entry.joinedMonth.slice(0, 12) : null,
+      isProtected: entry.isProtected === true,
+      isVerified: entry.isVerified === true,
+      isSuspended: entry.isSuspended === true,
+      displayName: typeof entry.displayName === 'string' ? entry.displayName.slice(0, 100) : null,
+      usernameChanges: Number.isInteger(changes) && changes >= 0 ? changes : null,
+      fetchedAt,
+      lastAccessed: Number(entry.lastAccessed) || fetchedAt,
+      ttl,
+      isNegative: entry.isNegative === true
+    };
   }
 
   /**

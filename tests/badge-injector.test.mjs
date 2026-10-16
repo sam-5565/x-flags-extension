@@ -83,7 +83,7 @@ test('suspended profiles use the suspended-account badge', () => {
   assert.equal(badge.children[0].textContent, '🚫');
   assert.equal(
     badge.children[0].attributes.get('data-tooltip'),
-    'Account suspended'
+    'Account suspended or unavailable'
   );
 });
 

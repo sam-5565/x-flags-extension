@@ -29,6 +29,8 @@ const USER_BY_SCREEN_NAME_FEATURES = {
 
 const USERNAME_PATTERN = /^[a-z0-9_]{1,15}$/;
 const DEFAULT_RATE_LIMIT_BACKOFF = 5 * 60 * 1000;
+const MAX_RATE_LIMIT_BACKOFF = 60 * 60 * 1000;
+const RATE_LIMIT_STORAGE_KEY = 'rateLimitedUntil';
 
 class RateLimitError extends Error {
   constructor(resetAt) {
@@ -36,6 +38,14 @@ class RateLimitError extends Error {
     this.name = 'RateLimitError';
     this.rateLimited = true;
     this.resetAt = resetAt;
+  }
+}
+
+class AuthError extends Error {
+  constructor() {
+    super('Sign in to X to load country info');
+    this.name = 'AuthError';
+    this.authFailed = true;
   }
 }
 
@@ -63,6 +73,20 @@ function createEmptyProfile(username) {
  */
 function hasProfileData(data) {
   return Boolean(data && (data.basedIn || data.connectedVia || data.joinedYear));
+}
+
+/**
+ * Whether a GraphQL response reports errors instead of (or alongside) data.
+ * X answers HTTP 200 with an `errors` array when a query ID is stale or a
+ * required feature flag is missing; that must not be mistaken for "user has
+ * no data".
+ */
+function hasGraphqlErrors(json) {
+  return Array.isArray(json?.errors) && json.errors.length > 0;
+}
+
+function nonEmptyString(value) {
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
 }
 
 /**
@@ -96,7 +120,7 @@ function applyUserResultFields(data, userResult) {
     data.joinedMonth = joined.month;
   }
 
-  const name = core.name || legacy.name;
+  const name = nonEmptyString(core.name) || nonEmptyString(legacy.name);
   if (name) data.displayName = name;
 
   if (legacy.protected || userResult.privacy?.protected) data.isProtected = true;
@@ -142,18 +166,17 @@ function parseAboutAccountResponse(json, username) {
 
   const aboutProfile = userResult.about_profile;
   if (aboutProfile) {
-    if (aboutProfile.account_based_in) {
-      data.basedIn = {
-        country: aboutProfile.account_based_in,
-        raw: aboutProfile.account_based_in
-      };
+    const basedIn = nonEmptyString(aboutProfile.account_based_in);
+    if (basedIn) {
+      data.basedIn = { country: basedIn, raw: basedIn };
     }
 
     // "Connected via" is called "source" in the API, e.g. "Europe Android App"
-    if (aboutProfile.source) {
+    const source = nonEmptyString(aboutProfile.source);
+    if (source) {
       data.connectedVia = {
-        country: normalizeCountryName(aboutProfile.source),
-        raw: aboutProfile.source
+        country: normalizeCountryName(source),
+        raw: source
       };
     }
 
@@ -162,7 +185,10 @@ function parseAboutAccountResponse(json, username) {
       data.hasVpnWarning = true;
     }
 
-    const changeCount = Number(aboutProfile.username_changes?.count);
+    const changes = aboutProfile.username_changes;
+    const changeCount = Number(
+      changes && typeof changes === 'object' ? changes.count : changes
+    );
     if (Number.isFinite(changeCount) && changeCount >= 0) {
       data.usernameChanges = changeCount;
     }
@@ -193,18 +219,24 @@ class ProfileFetcher {
    * @param {Function} [options.fetch] - fetch implementation (for tests)
    * @param {number} [options.minDelay] - Minimum ms between profile lookups
    * @param {number} [options.callGap] - Pause between the two GraphQL calls
+   * @param {Object} [options.sessionStorage] - chrome.storage.session-like
+   *   area used to remember rate limits across service worker restarts
    */
   constructor(cacheManager, options = {}) {
     this.cache = cacheManager;
     this.fetchImpl = options.fetch || ((...args) => fetch(...args));
     this.MIN_DELAY = options.minDelay ?? 1000;
     this.CALL_GAP = options.callGap ?? 300;
+    this.sessionStorage = options.sessionStorage !== undefined
+      ? options.sessionStorage
+      : (typeof chrome !== 'undefined' ? chrome.storage?.session : null) || null;
 
     this.inFlight = new Map();
     this.queueTail = Promise.resolve();
     this.queueLength = 0;
     this.lastRequestAt = 0;
     this.rateLimitedUntil = 0;
+    this.rateLimitLoaded = null;
   }
 
   /**
@@ -220,9 +252,12 @@ class ProfileFetcher {
       throw new Error('Invalid username');
     }
 
+    await this._loadRateLimit();
     const cached = await this.cache.get(key);
     if (cached) return cached;
 
+    // No awaits between this check and inFlight.set(), or two concurrent
+    // calls for the same user would both start a fetch.
     if (this.inFlight.has(key)) {
       return this.inFlight.get(key);
     }
@@ -236,18 +271,23 @@ class ProfileFetcher {
   }
 
   /**
-   * Run tasks one at a time with at least MIN_DELAY between them.
+   * Run tasks one at a time with at least MIN_DELAY between network requests.
    */
   _enqueue(task) {
     this.queueLength++;
     const run = this.queueTail.then(async () => {
       try {
+        // Fail queued lookups immediately once X has rate-limited us,
+        // instead of making each one wait its turn first.
+        this._throwIfRateLimited();
+
         const wait = this.lastRequestAt + this.MIN_DELAY - Date.now();
         if (wait > 0) await this._sleep(wait);
         this._throwIfRateLimited();
+
+        this.lastRequestAt = Date.now();
         return await task();
       } finally {
-        this.lastRequestAt = Date.now();
         this.queueLength--;
       }
     });
@@ -258,17 +298,25 @@ class ProfileFetcher {
   async _fetchAndCache(username, csrfToken) {
     const { data, complete } = await this._fetchFromX(username, csrfToken);
 
-    if (hasProfileData(data) || data.isSuspended) {
+    if (data.isSuspended) {
+      return this.cache.set(username, data, false, false, this.cache.UNAVAILABLE_TTL);
+    }
+
+    if (!complete) {
+      // One of the two queries failed (stale query ID, server error...).
+      // Keep whatever we got for a short while rather than for a month.
+      return hasProfileData(data)
+        ? this.cache.set(username, data, false, false, this.cache.PARTIAL_TTL)
+        : data;
+    }
+
+    if (hasProfileData(data)) {
       return this.cache.set(username, data, data.isVerified, false);
     }
 
-    if (complete) {
-      // X answered both queries but had nothing to show - remember that so
-      // we don't keep asking.
-      return this.cache.set(username, data, false, true);
-    }
-
-    return data;
+    // X answered both queries but had nothing to show - remember that so we
+    // don't keep asking.
+    return this.cache.set(username, data, false, true);
   }
 
   /**
@@ -277,7 +325,7 @@ class ProfileFetcher {
    */
   async _fetchFromX(username, csrfToken) {
     if (!csrfToken) {
-      throw new Error('Not signed in to X');
+      throw new AuthError();
     }
 
     const headers = {
@@ -301,9 +349,10 @@ class ProfileFetcher {
       `&features=${encodeURIComponent(JSON.stringify(USER_BY_SCREEN_NAME_FEATURES))}`;
 
     const userJson = await this._getJson(userUrl, headers, 'UserByScreenName');
-    if (userJson) {
-      data = mergeProfileData(data, parseUserByScreenName(userJson, username));
-    } else {
+    const userData = userJson ? parseUserByScreenName(userJson, username) : null;
+    if (userData) {
+      data = mergeProfileData(data, userData);
+    } else if (!userJson || hasGraphqlErrors(userJson)) {
       complete = false;
     }
 
@@ -317,27 +366,21 @@ class ProfileFetcher {
     const aboutUrl = `https://x.com/i/api/graphql/${ABOUT_ACCOUNT_QUERY_ID}/AboutAccountQuery` +
       `?variables=${encodeURIComponent(JSON.stringify({ screenName: username }))}`;
 
-    let aboutJson = null;
-    try {
-      aboutJson = await this._getJson(aboutUrl, headers, 'AboutAccountQuery');
-    } catch (error) {
-      // Keep the join date we already have if only the second call was limited.
-      if (!(error instanceof RateLimitError) || !hasProfileData(data)) throw error;
-    }
-
-    if (aboutJson) {
-      data = mergeProfileData(data, parseAboutAccountResponse(aboutJson, username));
-    } else {
+    const aboutJson = await this._getJson(aboutUrl, headers, 'AboutAccountQuery');
+    const aboutData = aboutJson ? parseAboutAccountResponse(aboutJson, username) : null;
+    if (aboutData) {
+      data = mergeProfileData(data, aboutData);
+    } else if (!aboutJson || hasGraphqlErrors(aboutJson)) {
       complete = false;
     }
 
-    XFlagLogger.log('[ProfileFetcher] Combined data for', username, data);
+    XFlagLogger.log('[ProfileFetcher] Combined data for', username, data, complete ? '' : '(partial)');
     return { data, complete };
   }
 
   /**
    * GET a GraphQL endpoint and return its JSON, or null on failure.
-   * Throws RateLimitError on HTTP 429.
+   * Throws RateLimitError on HTTP 429 and AuthError on 401/403.
    */
   async _getJson(url, headers, label) {
     let response;
@@ -349,8 +392,13 @@ class ProfileFetcher {
     }
 
     if (response.status === 429) {
-      this._handleRateLimit(response);
+      await this._handleRateLimit(response);
       throw new RateLimitError(this.rateLimitedUntil);
+    }
+
+    if (response.status === 401 || response.status === 403) {
+      console.warn(`[ProfileFetcher] ${label} rejected: HTTP ${response.status}`);
+      throw new AuthError();
     }
 
     if (!response.ok) {
@@ -366,13 +414,13 @@ class ProfileFetcher {
     }
   }
 
-  _handleRateLimit(response) {
+  async _handleRateLimit(response) {
     const reset = parseInt(response.headers?.get?.('x-rate-limit-reset'), 10);
     const resetAt = Number.isFinite(reset) ? reset * 1000 : 0;
     const now = Date.now();
 
     // Ignore missing, past or absurd reset values.
-    this.rateLimitedUntil = resetAt > now && resetAt - now < 60 * 60 * 1000
+    this.rateLimitedUntil = resetAt > now && resetAt - now < MAX_RATE_LIMIT_BACKOFF
       ? resetAt
       : now + DEFAULT_RATE_LIMIT_BACKOFF;
 
@@ -380,6 +428,31 @@ class ProfileFetcher {
       '[ProfileFetcher] Rate limited by X until',
       new Date(this.rateLimitedUntil).toLocaleTimeString()
     );
+
+    // The service worker may be shut down before the limit lifts; remember
+    // it so a restarted worker doesn't immediately hit X again.
+    try {
+      await this.sessionStorage?.set?.({ [RATE_LIMIT_STORAGE_KEY]: this.rateLimitedUntil });
+    } catch (error) {
+      XFlagLogger.log('[ProfileFetcher] Could not persist rate limit:', error);
+    }
+  }
+
+  _loadRateLimit() {
+    if (!this.rateLimitLoaded) {
+      this.rateLimitLoaded = (async () => {
+        try {
+          const stored = await this.sessionStorage?.get?.(RATE_LIMIT_STORAGE_KEY);
+          const until = Number(stored?.[RATE_LIMIT_STORAGE_KEY]);
+          if (Number.isFinite(until) && until > this.rateLimitedUntil) {
+            this.rateLimitedUntil = until;
+          }
+        } catch (error) {
+          XFlagLogger.log('[ProfileFetcher] Could not read rate limit:', error);
+        }
+      })();
+    }
+    return this.rateLimitLoaded;
   }
 
   _throwIfRateLimited() {
@@ -408,6 +481,7 @@ class ProfileFetcher {
 if (typeof self !== 'undefined') {
   self.ProfileFetcher = ProfileFetcher;
   self.RateLimitError = RateLimitError;
+  self.AuthError = AuthError;
   self.parseUserByScreenName = parseUserByScreenName;
   self.parseAboutAccountResponse = parseAboutAccountResponse;
   self.mergeProfileData = mergeProfileData;

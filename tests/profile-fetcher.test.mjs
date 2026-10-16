@@ -190,5 +190,69 @@ test('invalid usernames and missing CSRF tokens are rejected', async () => {
   const { fetcher } = createFetcher(async () => jsonResponse({}));
 
   await assert.rejects(fetcher.fetchProfile('not a user', 'csrf'), /Invalid username/);
-  await assert.rejects(fetcher.fetchProfile('valid_user', null), /Not signed in/);
+  await assert.rejects(fetcher.fetchProfile('valid_user', null), /Sign in to X/);
+});
+
+test('GraphQL error payloads are not cached as "no data"', async () => {
+  let calls = 0;
+  const { fetcher } = createFetcher(async () => {
+    calls++;
+    // What X returns (HTTP 200) when a query ID is stale or a feature flag is missing
+    return jsonResponse({ errors: [{ message: 'Query not found' }], data: {} });
+  });
+
+  const first = await fetcher.fetchProfile('any_user', 'csrf');
+  assert.equal(first.isNegative, undefined);
+  assert.equal(first.fetchedAt, undefined);
+
+  await fetcher.fetchProfile('any_user', 'csrf');
+  assert.equal(calls, 4, 'must retry instead of serving a negative cache entry');
+});
+
+test('a result with one failed query is cached only briefly', async () => {
+  const { fetcher, cache } = createFetcher(async url =>
+    url.includes('UserByScreenName') ? jsonResponse({}, 500) : jsonResponse(aboutAccount)
+  );
+
+  const data = await fetcher.fetchProfile('partial_user', 'csrf');
+  assert.equal(data.basedIn.country, 'Canada');
+  assert.equal(data.ttl, cache.PARTIAL_TTL);
+});
+
+test('a 429 on the second query surfaces as a rate limit, not partial data', async () => {
+  const { fetcher } = createFetcher(async url =>
+    url.includes('UserByScreenName') ? jsonResponse(userByScreenName) : jsonResponse({}, 429)
+  );
+
+  await assert.rejects(fetcher.fetchProfile('half_user', 'csrf'), /Rate limited/);
+});
+
+test('rate limits are remembered across fetcher instances via session storage', async () => {
+  const session = {};
+  const sessionStorage = {
+    async get(key) { return { [key]: session[key] }; },
+    async set(values) { Object.assign(session, values); }
+  };
+  const modules = loadModules();
+  const limited = new modules.ProfileFetcher(new modules.CacheManager(), {
+    fetch: async () => jsonResponse({}, 429),
+    minDelay: 0, callGap: 0, sessionStorage
+  });
+  await assert.rejects(limited.fetchProfile('a_user', 'csrf'), /Rate limited/);
+
+  let calls = 0;
+  const restarted = new modules.ProfileFetcher(new modules.CacheManager(), {
+    fetch: async () => { calls++; return jsonResponse(aboutAccount); },
+    minDelay: 0, callGap: 0, sessionStorage
+  });
+  await assert.rejects(restarted.fetchProfile('b_user', 'csrf'), /Rate limited/);
+  assert.equal(calls, 0);
+});
+
+test('401/403 responses report a sign-in problem', async () => {
+  const { fetcher } = createFetcher(async () => jsonResponse({}, 403));
+  await assert.rejects(fetcher.fetchProfile('auth_user', 'csrf'), error => {
+    assert.equal(error.authFailed, true);
+    return true;
+  });
 });
