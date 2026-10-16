@@ -2,15 +2,12 @@
  * Popup Script - Settings UI and cache management
  */
 
-// Message types (duplicated here since popup doesn't have access to content scripts)
-const MESSAGE_TYPES = {
-  GET_SETTINGS: 'GET_SETTINGS',
-  UPDATE_SETTINGS: 'UPDATE_SETTINGS',
-  CLEAR_CACHE: 'CLEAR_CACHE',
-  GET_CACHE_STATS: 'GET_CACHE_STATS',
-  EXPORT_DATA: 'EXPORT_DATA',
-  IMPORT_DATA: 'IMPORT_DATA'
-};
+// MESSAGE_TYPES comes from ../shared/message-types.js
+
+// Firefox closes extension popups when a file picker opens, so importing has
+// to happen from the same page opened in a regular tab.
+const IS_FIREFOX = typeof browser !== 'undefined' && navigator.userAgent.includes('Firefox');
+const IS_TAB = new URLSearchParams(location.search).has('tab');
 
 // Setting IDs that map to checkboxes
 const SETTING_IDS = [
@@ -38,6 +35,10 @@ async function init() {
 
   // Setup event listeners
   setupEventListeners();
+
+  if (IS_TAB) {
+    document.body.classList.add('in-tab');
+  }
 }
 
 /**
@@ -99,6 +100,31 @@ async function loadCacheStats() {
   } catch (error) {
     console.error('Error loading cache stats:', error);
   }
+
+  await loadStatus();
+}
+
+/**
+ * Show whether X is currently rate-limiting profile lookups
+ */
+async function loadStatus() {
+  const statusEl = document.getElementById('fetchStatus');
+  if (!statusEl) return;
+
+  try {
+    const response = await sendMessage({ type: MESSAGE_TYPES.GET_STATUS });
+    const until = response.fetcher?.rateLimitedUntil;
+
+    if (until) {
+      const time = new Date(until).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      statusEl.textContent = `⏳ X rate limit reached - lookups resume at ${time}`;
+      statusEl.hidden = false;
+    } else {
+      statusEl.hidden = true;
+    }
+  } catch (error) {
+    statusEl.hidden = true;
+  }
 }
 
 /**
@@ -121,6 +147,11 @@ function setupEventListeners() {
 
   // Import button
   document.getElementById('importData').addEventListener('click', () => {
+    if (IS_FIREFOX && !IS_TAB) {
+      chrome.tabs.create({ url: chrome.runtime.getURL('src/popup/popup.html?tab=1') });
+      window.close();
+      return;
+    }
     document.getElementById('importFile').click();
   });
 
@@ -203,7 +234,8 @@ async function handleExport() {
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+    // Revoking immediately can cancel the download in some browsers
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
 
     showToast('Data exported successfully', 'success');
 
@@ -228,7 +260,7 @@ async function handleImport(event) {
     const data = JSON.parse(text);
 
     // Validate data structure
-    if (!data.cache && !data.settings) {
+    if (!data || typeof data !== 'object' || (!data.cache && !data.settings)) {
       throw new Error('Invalid data format');
     }
 

@@ -9,11 +9,23 @@ const BadgeInjector = {
   // Keep each injected badge associated with its username element.
   injectedBadges: new WeakMap(),
 
+  // The single tooltip currently shown, and the element it belongs to.
+  activeTooltip: null,
+  tooltipOwner: null,
+
   /**
    * Initialize with settings
    */
   init(settings) {
-    this.settings = settings || CONSTANTS.DISPLAY_DEFAULTS;
+    this.settings = { ...CONSTANTS.DISPLAY_DEFAULTS, ...settings };
+
+    // Tooltips are fixed-position, so hide them when the page moves. X also
+    // removes tweets from the DOM while scrolling, which would otherwise
+    // leave an orphaned tooltip on screen.
+    if (typeof window !== 'undefined' && window.addEventListener) {
+      window.addEventListener('scroll', () => this._hideTooltip(), { passive: true, capture: true });
+      window.addEventListener('blur', () => this._hideTooltip());
+    }
   },
 
   /**
@@ -55,28 +67,26 @@ const BadgeInjector = {
       elements.push(this._createProtectedIcon());
     }
 
+    const hasMismatch = this._checkMismatch(profileData);
+
     // Based-in flag
-    if (profileData.basedIn && this.settings.showBasedIn) {
-      const flag = getFlag(profileData.basedIn.country);
-      const hasMismatch = this._checkMismatch(profileData);
-      if (flag) {
-        elements.push(this._createFlagSpan(flag, profileData.basedIn.country, 'based-in', hasMismatch));
-      } else {
-        // No flag found - show text label
-        elements.push(this._createTextLabel(profileData.basedIn.country, 'based-in', hasMismatch));
-      }
+    const basedIn = profileData.basedIn?.country;
+    if (basedIn && this.settings.showBasedIn) {
+      const flag = getFlag(basedIn);
+      const tooltip = `Account based in: ${basedIn}`;
+      elements.push(flag
+        ? this._createFlagSpan(flag, tooltip, 'based-in', hasMismatch)
+        : this._createTextLabel(basedIn, tooltip, 'based-in', hasMismatch));
     }
 
     // Connected-via flag
-    if (profileData.connectedVia && this.settings.showConnectedVia) {
-      const flag = getFlag(profileData.connectedVia.country);
-      const hasMismatch = this._checkMismatch(profileData);
-      if (flag) {
-        elements.push(this._createFlagSpan(flag, profileData.connectedVia.raw, 'connected-via', hasMismatch));
-      } else {
-        // No flag found - show text label
-        elements.push(this._createTextLabel(profileData.connectedVia.country, 'connected-via', hasMismatch));
-      }
+    const connectedVia = profileData.connectedVia?.country || profileData.connectedVia?.raw;
+    if (connectedVia && this.settings.showConnectedVia) {
+      const flag = getFlag(connectedVia);
+      const tooltip = `Connected via: ${profileData.connectedVia.raw || connectedVia}`;
+      elements.push(flag
+        ? this._createFlagSpan(flag, tooltip, 'connected-via', hasMismatch)
+        : this._createTextLabel(connectedVia, tooltip, 'connected-via', hasMismatch));
     }
 
     // VPN warning
@@ -86,7 +96,11 @@ const BadgeInjector = {
 
     // Join year
     if (profileData.joinedYear && this.settings.showYear) {
-      elements.push(this._createYearSpan(profileData.joinedYear));
+      elements.push(this._createYearSpan(
+        profileData.joinedYear,
+        profileData.joinedMonth,
+        profileData.usernameChanges
+      ));
     }
 
     if (elements.length === 0) {
@@ -171,12 +185,14 @@ const BadgeInjector = {
    * Update an existing badge with new data
    */
   update(usernameElement, profileData) {
-    const newBadge = this.createBadge(profileData);
-    if (newBadge) {
-      this.inject(usernameElement, newBadge);
-    } else {
-      this.remove(usernameElement);
+    let newBadge = this.createBadge(profileData);
+    if (!newBadge) {
+      // Keep an empty marker so the element isn't treated as unprocessed and
+      // re-rendered on every DOM change.
+      newBadge = document.createElement('span');
+      newBadge.className = `${CONSTANTS.CSS_CLASSES.BADGE_CONTAINER} x-flag-empty`;
     }
+    this.inject(usernameElement, newBadge);
   },
 
   /**
@@ -189,9 +205,18 @@ const BadgeInjector = {
       span.classList.add(CONSTANTS.CSS_CLASSES.MISMATCH);
     }
     span.setAttribute('data-type', type);
-    span.setAttribute('data-tooltip', tooltip);
+    this._setLabel(span, tooltip);
     span.textContent = flag;
     return span;
+  },
+
+  /**
+   * Give an icon a tooltip and an accessible name.
+   */
+  _setLabel(span, label) {
+    span.setAttribute('data-tooltip', label);
+    span.setAttribute('aria-label', label);
+    span.setAttribute('role', 'img');
   },
 
   /**
@@ -200,7 +225,7 @@ const BadgeInjector = {
   _createVpnWarning() {
     const span = document.createElement('span');
     span.className = CONSTANTS.CSS_CLASSES.WARNING;
-    span.setAttribute('data-tooltip', 'X detected VPN/location mismatch');
+    this._setLabel(span, 'X says this account may be using a VPN or proxy');
     span.textContent = '⚠️';
     return span;
   },
@@ -208,11 +233,15 @@ const BadgeInjector = {
   /**
    * Create year span element
    */
-  _createYearSpan(year) {
+  _createYearSpan(year, month, usernameChanges) {
     const shortYear = String(year).slice(-2);
     const span = document.createElement('span');
     span.className = CONSTANTS.CSS_CLASSES.YEAR;
-    span.setAttribute('data-tooltip', `Joined ${year}`);
+    let tooltip = month ? `Joined ${month} ${year}` : `Joined ${year}`;
+    if (Number.isFinite(usernameChanges) && usernameChanges > 0) {
+      tooltip += ` · username changed ${usernameChanges} time${usernameChanges === 1 ? '' : 's'}`;
+    }
+    this._setLabel(span, tooltip);
     span.textContent = `'${shortYear}`;
     return span;
   },
@@ -220,14 +249,14 @@ const BadgeInjector = {
   /**
    * Create text label when no flag emoji is available
    */
-  _createTextLabel(text, type, hasMismatch) {
+  _createTextLabel(text, tooltip, type, hasMismatch) {
     const span = document.createElement('span');
     span.className = `${CONSTANTS.CSS_CLASSES.FLAG} x-flag-text`;
     if (hasMismatch && this.settings.showMismatchHighlight) {
       span.classList.add(CONSTANTS.CSS_CLASSES.MISMATCH);
     }
     span.setAttribute('data-type', type);
-    span.setAttribute('data-tooltip', text);
+    this._setLabel(span, tooltip);
     // Shorten long region names
     span.textContent = text.length > 12 ? text.substring(0, 10) + '…' : text;
     return span;
@@ -239,7 +268,7 @@ const BadgeInjector = {
   _createProtectedIcon() {
     const span = document.createElement('span');
     span.className = CONSTANTS.CSS_CLASSES.PROTECTED;
-    span.setAttribute('data-tooltip', 'Protected account');
+    this._setLabel(span, 'Protected account');
     span.textContent = '🔒';
     return span;
   },
@@ -250,7 +279,7 @@ const BadgeInjector = {
   _createSuspendedBadge() {
     const span = document.createElement('span');
     span.className = CONSTANTS.CSS_CLASSES.ERROR;
-    span.setAttribute('data-tooltip', 'Account suspended');
+    this._setLabel(span, 'Account suspended');
     span.textContent = '🚫';
     return span;
   },
@@ -261,23 +290,28 @@ const BadgeInjector = {
   _createErrorBadge() {
     const span = document.createElement('span');
     span.className = CONSTANTS.CSS_CLASSES.ERROR;
-    span.setAttribute('data-tooltip', 'Failed to load');
+    this._setLabel(span, 'Failed to load');
     span.textContent = '❌';
     return span;
   },
 
   /**
-   * Check if there's a country mismatch
+   * Check if "based in" and "connected via" name different countries.
+   * Names are compared by ISO code so "United States" matches "US App
+   * Store". Regions such as "Europe" or "South Asia" are too coarse to call
+   * a mismatch, so they never count as one.
    */
   _checkMismatch(profileData) {
     if (!profileData.basedIn || !profileData.connectedVia) {
       return false;
     }
 
-    const basedInCountry = normalizeCountryName(profileData.basedIn.country).toLowerCase();
-    const connectedViaCountry = normalizeCountryName(profileData.connectedVia.country).toLowerCase();
+    const basedInCode = getCountryCode(profileData.basedIn.country);
+    const connectedViaCode = getCountryCode(
+      profileData.connectedVia.country || profileData.connectedVia.raw
+    );
 
-    return basedInCountry !== connectedViaCountry;
+    return Boolean(basedInCode && connectedViaCode && basedInCode !== connectedViaCode);
   },
 
   /**
@@ -287,55 +321,54 @@ const BadgeInjector = {
     const tooltipElements = container.querySelectorAll('[data-tooltip]');
 
     for (const el of tooltipElements) {
-      el.addEventListener('mouseenter', this._showTooltip.bind(this));
-      el.addEventListener('mouseleave', this._hideTooltip.bind(this));
+      el.addEventListener('mouseenter', event => this._showTooltip(event.currentTarget));
+      el.addEventListener('mouseleave', () => this._hideTooltip());
     }
   },
 
   /**
-   * Show tooltip
+   * Show tooltip for an element with a data-tooltip attribute
    */
-  _showTooltip(event) {
-    const target = event.target;
-    const tooltipText = target.getAttribute('data-tooltip');
-
+  _showTooltip(target) {
+    const tooltipText = target?.getAttribute('data-tooltip');
     if (!tooltipText) return;
 
-    // Remove any existing tooltip
     this._hideTooltip();
 
-    // Create tooltip element
     const tooltip = document.createElement('div');
     tooltip.className = CONSTANTS.CSS_CLASSES.TOOLTIP;
+    tooltip.setAttribute('role', 'tooltip');
     tooltip.textContent = tooltipText;
 
-    // Position tooltip
+    // Position below the icon, kept inside the viewport horizontally
     const rect = target.getBoundingClientRect();
+    const center = rect.left + rect.width / 2;
+    const margin = 8;
     tooltip.style.position = 'fixed';
-    tooltip.style.left = `${rect.left + rect.width / 2}px`;
+    tooltip.style.left = `${Math.min(Math.max(center, margin), window.innerWidth - margin)}px`;
     tooltip.style.top = `${rect.bottom + 5}px`;
     tooltip.style.transform = 'translateX(-50%)';
 
     document.body.appendChild(tooltip);
 
-    // Store reference for cleanup
-    target._tooltip = tooltip;
+    this.activeTooltip = tooltip;
+    this.tooltipOwner = target;
   },
 
   /**
-   * Hide tooltip
+   * Hide the active tooltip (and any stray ones)
    */
-  _hideTooltip(event) {
-    if (event?.target?._tooltip) {
-      event.target._tooltip.remove();
-      delete event.target._tooltip;
-    } else {
-      // Fallback: remove all tooltips
-      const tooltips = document.querySelectorAll(`.${CONSTANTS.CSS_CLASSES.TOOLTIP}`);
-      tooltips.forEach(t => t.remove());
+  _hideTooltip() {
+    if (this.activeTooltip) {
+      this.activeTooltip.remove();
     }
-  },
+    this.activeTooltip = null;
+    this.tooltipOwner = null;
 
+    if (typeof document !== 'undefined' && document.querySelectorAll) {
+      document.querySelectorAll(`.${CONSTANTS.CSS_CLASSES.TOOLTIP}`).forEach(t => t.remove());
+    }
+  }
 };
 
 // Make available globally

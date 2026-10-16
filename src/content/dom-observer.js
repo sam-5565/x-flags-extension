@@ -6,24 +6,19 @@ const DOMObserver = {
   // Observer instance
   observer: null,
 
-  // Intersection observer for visibility
-  intersectionObserver: null,
-
   // Debounce timer
   debounceTimer: null,
 
   // Scroll tracking
   isScrolling: false,
   scrollTimer: null,
+  scrollHandler: null,
+
+  // Whether a processing pass is already scheduled
+  processScheduled: false,
 
   // Callback for when new usernames are found
   onNewUsernames: null,
-
-  // Queue of elements to process
-  pendingElements: new Set(),
-
-  // Visible elements
-  visibleElements: new Set(),
 
   /**
    * Initialize the observer
@@ -32,7 +27,6 @@ const DOMObserver = {
   init(callback) {
     this.onNewUsernames = callback;
     this._setupMutationObserver();
-    this._setupIntersectionObserver();
     this._setupScrollTracking();
 
     XFlagLogger.log('[DOMObserver] Initialized');
@@ -46,10 +40,9 @@ const DOMObserver = {
       this._setupMutationObserver();
     }
 
-    // Observe the main content area
-    const mainContent = document.querySelector('main') || document.body;
-
-    this.observer.observe(mainContent, {
+    // Observe the whole body: X swaps out <main> when navigating between
+    // some pages, and modals/hovercards render outside it.
+    this.observer.observe(document.body, {
       childList: true,
       subtree: true
     });
@@ -68,16 +61,17 @@ const DOMObserver = {
       this.observer.disconnect();
     }
 
-    if (this.intersectionObserver) {
-      this.intersectionObserver.disconnect();
-    }
-
     if (this.debounceTimer) {
       clearTimeout(this.debounceTimer);
     }
 
     if (this.scrollTimer) {
       clearTimeout(this.scrollTimer);
+    }
+
+    if (this.scrollHandler) {
+      window.removeEventListener('scroll', this.scrollHandler);
+      this.scrollHandler = null;
     }
 
     XFlagLogger.log('[DOMObserver] Stopped observing');
@@ -94,14 +88,15 @@ const DOMObserver = {
    * Setup mutation observer
    */
   _setupMutationObserver() {
-    this.observer = new MutationObserver((mutations) => {
+    this.observer = new MutationObserver(() => {
       // Debounce rapid mutations
       if (this.debounceTimer) {
         clearTimeout(this.debounceTimer);
       }
 
       this.debounceTimer = setTimeout(() => {
-        // Skip processing during rapid scroll
+        // Skip processing during rapid scroll; the scroll handler rescans
+        // once scrolling settles.
         if (this.isScrolling) {
           return;
         }
@@ -112,36 +107,14 @@ const DOMObserver = {
   },
 
   /**
-   * Setup intersection observer for visibility tracking
-   */
-  _setupIntersectionObserver() {
-    this.intersectionObserver = new IntersectionObserver(
-      (entries) => {
-        for (const entry of entries) {
-          if (entry.isIntersecting) {
-            this.visibleElements.add(entry.target);
-          } else {
-            this.visibleElements.delete(entry.target);
-          }
-        }
-
-        // Process visible elements with priority
-        this._processVisibleElements();
-      },
-      {
-        threshold: CONSTANTS.OBSERVER.INTERSECTION_THRESHOLD,
-        rootMargin: '100px' // Pre-fetch slightly before visible
-      }
-    );
-  },
-
-  /**
    * Setup scroll tracking to pause during rapid scrolling
    */
   _setupScrollTracking() {
+    if (this.scrollHandler) return;
+
     let lastScrollY = window.scrollY;
 
-    const scrollHandler = () => {
+    this.scrollHandler = () => {
       const currentScrollY = window.scrollY;
       const scrollDelta = Math.abs(currentScrollY - lastScrollY);
 
@@ -164,18 +137,26 @@ const DOMObserver = {
     };
 
     // Use passive listener for better scroll performance
-    window.addEventListener('scroll', scrollHandler, { passive: true });
+    window.addEventListener('scroll', this.scrollHandler, { passive: true });
   },
 
   /**
-   * Process new content for usernames
+   * Schedule a processing pass for new content
    */
   _processNewContent() {
+    if (this.processScheduled) return;
+    this.processScheduled = true;
+
+    const run = () => {
+      this.processScheduled = false;
+      this._doProcess();
+    };
+
     // Use requestIdleCallback if available for non-critical updates
     if (window.requestIdleCallback) {
-      window.requestIdleCallback(() => this._doProcess(), { timeout: 1000 });
+      window.requestIdleCallback(run, { timeout: 1000 });
     } else {
-      setTimeout(() => this._doProcess(), 0);
+      setTimeout(run, 0);
     }
   },
 
@@ -183,7 +164,6 @@ const DOMObserver = {
    * Actually do the processing
    */
   _doProcess() {
-    // Find new username elements
     const newElements = UsernameFinder.findNew();
 
     if (newElements.length === 0) {
@@ -192,59 +172,9 @@ const DOMObserver = {
 
     XFlagLogger.log(`[DOMObserver] Found ${newElements.length} new username elements`);
 
-    // Add to pending and observe for visibility
-    for (const item of newElements) {
-      this.pendingElements.add(item);
-
-      // Track visibility
-      if (this.intersectionObserver) {
-        this.intersectionObserver.observe(item.element);
-      }
+    if (this.onNewUsernames) {
+      this.onNewUsernames(newElements);
     }
-
-    // Process visible elements first
-    this._processVisibleElements();
-
-    // Then process remaining elements
-    this._processRemainingElements();
-  },
-
-  /**
-   * Process visible elements with priority
-   */
-  _processVisibleElements() {
-    const visibleItems = [];
-
-    for (const item of this.pendingElements) {
-      if (this.visibleElements.has(item.element)) {
-        visibleItems.push(item);
-        this.pendingElements.delete(item);
-      }
-    }
-
-    if (visibleItems.length > 0 && this.onNewUsernames) {
-      this.onNewUsernames(visibleItems, true); // true = high priority
-    }
-  },
-
-  /**
-   * Process remaining (non-visible) elements
-   */
-  _processRemainingElements() {
-    const remainingItems = Array.from(this.pendingElements);
-    this.pendingElements.clear();
-
-    if (remainingItems.length > 0 && this.onNewUsernames) {
-      this.onNewUsernames(remainingItems, false); // false = normal priority
-    }
-  },
-
-  /**
-   * Clear all pending elements
-   */
-  clearPending() {
-    this.pendingElements.clear();
-    this.visibleElements.clear();
   }
 };
 

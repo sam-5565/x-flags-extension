@@ -62,8 +62,17 @@ const UsernameFinder = {
    */
   findNew() {
     return this.findAll().filter(item => {
-      const isNew = !item.element.hasAttribute(CONSTANTS.DATA_ATTRS.PROCESSED);
-      return isNew;
+      if (!item.element.hasAttribute(CONSTANTS.DATA_ATTRS.PROCESSED)) {
+        return true;
+      }
+      // X recycles DOM nodes while scrolling; a processed link that now
+      // points at a different user needs a new badge.
+      const processedFor = item.element.getAttribute(CONSTANTS.DATA_ATTRS.USERNAME);
+      if (processedFor !== item.username.toLowerCase()) {
+        return true;
+      }
+      // React may also re-render the parent and drop our badge.
+      return typeof BadgeInjector !== 'undefined' && !BadgeInjector.get(item.element);
     });
   },
 
@@ -196,14 +205,7 @@ const UsernameFinder = {
     const username = match[1];
 
     // Skip non-username paths
-    const reservedPaths = [
-      'home', 'explore', 'search', 'notifications', 'messages',
-      'i', 'settings', 'compose', 'lists', 'bookmarks', 'communities',
-      'premium', 'jobs', 'live', 'topics', 'moments', 'help', 'tos',
-      'privacy', 'about', 'ads', 'business', 'developers', 'directory'
-    ];
-
-    if (reservedPaths.includes(username.toLowerCase())) {
+    if (this._isReservedPath(username)) {
       return null;
     }
 
@@ -246,15 +248,8 @@ const UsernameFinder = {
 
     const username = match[1];
 
-    // Skip reserved paths
-    const reservedPaths = [
-      'home', 'explore', 'search', 'notifications', 'messages',
-      'i', 'settings', 'compose', 'lists', 'bookmarks', 'communities',
-      'premium', 'jobs', 'live', 'topics', 'moments', 'help', 'tos',
-      'privacy', 'about', 'ads', 'business', 'developers', 'directory'
-    ];
-
-    if (reservedPaths.includes(username.toLowerCase())) {
+    // Skip non-username paths
+    if (this._isReservedPath(username)) {
       return null;
     }
 
@@ -269,6 +264,13 @@ const UsernameFinder = {
       username: username,
       context: 'generic'
     };
+  },
+
+  /**
+   * Whether a first path segment is an X page rather than a username
+   */
+  _isReservedPath(segment) {
+    return CONSTANTS.RESERVED_PATHS.includes(segment.toLowerCase());
   },
 
   /**

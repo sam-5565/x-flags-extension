@@ -19,6 +19,8 @@ function createCacheManager() {
   const storage = {};
   const context = vm.createContext({
     Blob,
+    setTimeout,
+    clearTimeout,
     chrome: {
       storage: {
         local: {
@@ -107,4 +109,44 @@ test('rejects unsupported or invalid import formats', async () => {
     cache.import({ version: 1, entries: [] }),
     /Invalid import data/
   );
+});
+
+test('writes are batched and flushed to storage', async () => {
+  const { cache, storage } = createCacheManager();
+  await cache.set('first_user', { joinedYear: 2010 });
+  await cache.set('second_user', { joinedYear: 2011 });
+
+  assert.equal(storage.profileCache, undefined);
+  await cache.flush();
+  assert.deepEqual(Object.keys(storage.profileCache).sort(), ['first_user', 'second_user']);
+});
+
+test('merge keeps existing fields that new data lacks', async () => {
+  const { cache } = createCacheManager();
+  await cache.set('merged_user', {
+    basedIn: { country: 'Canada', raw: 'Canada' },
+    joinedYear: 2015,
+    hasVpnWarning: true
+  });
+
+  const entry = await cache.merge('merged_user', {
+    basedIn: null,
+    joinedYear: 2015,
+    isProtected: true,
+    hasVpnWarning: false
+  });
+
+  assert.equal(entry.basedIn.country, 'Canada');
+  assert.equal(entry.hasVpnWarning, true);
+  assert.equal(entry.isProtected, true);
+  assert.equal(entry.isNegative, false);
+});
+
+test('negative entries are returned until they expire', async () => {
+  const { cache } = createCacheManager();
+  await cache.set('missing_user', { basedIn: null }, false, true);
+
+  const entry = await cache.get('missing_user');
+  assert.equal(entry.isNegative, true);
+  assert.equal(entry.ttl, cache.NEGATIVE_TTL);
 });

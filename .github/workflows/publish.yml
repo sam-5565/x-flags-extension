@@ -1,0 +1,61 @@
+name: Publish
+
+# Builds the store zips and, when the store credentials are configured as
+# repository secrets, uploads them to the Chrome Web Store and Firefox Add-ons.
+#
+# Required secrets:
+#   Chrome:  CHROME_EXTENSION_ID, CHROME_CLIENT_ID, CHROME_CLIENT_SECRET, CHROME_REFRESH_TOKEN
+#   Firefox: AMO_JWT_ISSUER, AMO_JWT_SECRET
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    env:
+      CHROME_EXTENSION_ID: ${{ secrets.CHROME_EXTENSION_ID }}
+      CHROME_CLIENT_ID: ${{ secrets.CHROME_CLIENT_ID }}
+      CHROME_CLIENT_SECRET: ${{ secrets.CHROME_CLIENT_SECRET }}
+      CHROME_REFRESH_TOKEN: ${{ secrets.CHROME_REFRESH_TOKEN }}
+      AMO_JWT_ISSUER: ${{ secrets.AMO_JWT_ISSUER }}
+      AMO_JWT_SECRET: ${{ secrets.AMO_JWT_SECRET }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Test and package
+        run: npm run package
+
+      - name: Lint Firefox package
+        run: npx --yes web-ext@8 lint --source-dir dist/firefox
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: store-packages
+          path: dist/*.zip
+
+      - name: Publish to Chrome Web Store
+        if: env.CHROME_REFRESH_TOKEN != ''
+        run: |
+          npx --yes chrome-webstore-upload-cli@3 \
+            --source dist/x-flags-chrome-*.zip \
+            --extension-id "$CHROME_EXTENSION_ID" \
+            --client-id "$CHROME_CLIENT_ID" \
+            --client-secret "$CHROME_CLIENT_SECRET" \
+            --refresh-token "$CHROME_REFRESH_TOKEN"
+
+      - name: Publish to Firefox Add-ons
+        if: env.AMO_JWT_SECRET != ''
+        run: |
+          npx --yes web-ext@8 sign \
+            --source-dir dist/firefox \
+            --channel listed \
+            --api-key "$AMO_JWT_ISSUER" \
+            --api-secret "$AMO_JWT_SECRET" \
+            --approval-timeout 0

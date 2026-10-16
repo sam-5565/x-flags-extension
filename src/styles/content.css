@@ -247,3 +247,40 @@
   color: #71767b;
   font-weight: 500;
 }
+
+/* Nothing to show for the current display settings */
+.x-flag-empty {
+  display: none !important;
+}
+
+/* Placeholder is a button: keyboard focus ring */
+.x-flag-placeholder {
+  cursor: pointer;
+  border-radius: 4px;
+}
+
+.x-flag-placeholder .x-flag-hover-icon {
+  opacity: 0.5;
+}
+
+.x-flag-placeholder:focus-visible {
+  outline: 2px solid #1d9bf0;
+  outline-offset: 1px;
+}
+
+.x-flag-placeholder:hover .x-flag-hover-icon,
+.x-flag-placeholder:focus-visible .x-flag-hover-icon {
+  opacity: 1;
+}
+
+/* X rate limit reached */
+.x-flag-rate-limited {
+  font-size: 12px;
+  opacity: 0.7;
+}
+
+/* Keep long tooltips readable */
+.x-flag-tooltip {
+  max-width: min(320px, calc(100vw - 16px));
+  white-space: normal;
+}

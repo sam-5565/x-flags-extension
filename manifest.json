@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "X Country Flag Extension",
-  "version": "1.0.1",
+  "version": "1.1.0",
   "description": "Display country flags and account metadata next to usernames on X/Twitter",
   "browser_specific_settings": {
     "gecko": {
@@ -22,7 +22,14 @@
   ],
   "background": {
     "service_worker": "src/background/background.js",
-    "scripts": ["src/background/background.js"]
+    "scripts": [
+      "src/shared/constants.js",
+      "src/shared/countries.js",
+      "src/shared/message-types.js",
+      "src/background/cache-manager.js",
+      "src/background/profile-fetcher.js",
+      "src/background/background.js"
+    ]
   },
   "content_scripts": [
     {

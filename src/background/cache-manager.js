@@ -13,11 +13,16 @@ class CacheManager {
     this.DEFAULT_TTL = 30 * 24 * 60 * 60 * 1000;     // 30 days for successful lookups
     this.VERIFIED_TTL = 30 * 24 * 60 * 60 * 1000;    // 30 days for verified accounts
     this.NEGATIVE_TTL = 7 * 24 * 60 * 60 * 1000;     // 7 days for failed lookups (retry sooner)
-    this.MAX_ENTRIES = 100000;                        // 100k entries
+    // chrome.storage.local is limited to ~10 MB without unlimitedStorage.
+    this.MAX_ENTRIES = 20000;
+    this.PERSIST_DELAY = 500;                         // Batch storage writes
 
     // In-memory cache for quick access
     this.memoryCache = new Map();
     this.initialized = false;
+    this.initPromise = null;
+    this.persistTimer = null;
+    this.persistPromise = null;
   }
 
   /**
@@ -25,7 +30,13 @@ class CacheManager {
    */
   async init() {
     if (this.initialized) return;
+    if (!this.initPromise) {
+      this.initPromise = this._load();
+    }
+    await this.initPromise;
+  }
 
+  async _load() {
     try {
       const data = await chrome.storage.local.get([this.STORAGE_KEY, this.STATS_KEY]);
       const cached = data[this.STORAGE_KEY] || {};
@@ -36,6 +47,12 @@ class CacheManager {
       }
 
       this.initialized = true;
+
+      // Older versions allowed far more entries than storage can hold.
+      while (this.memoryCache.size > this.MAX_ENTRIES) {
+        await this._evictLRU();
+      }
+
       XFlagLogger.log(`[CacheManager] Initialized with ${this.memoryCache.size} entries`);
     } catch (error) {
       console.error('[CacheManager] Init error:', error);
@@ -63,7 +80,7 @@ class CacheManager {
     if (now - entry.fetchedAt > ttl) {
       // Expired, remove from cache
       this.memoryCache.delete(key);
-      this._persistCache();
+      this._schedulePersist();
       return null;
     }
 
@@ -125,9 +142,36 @@ class CacheManager {
       await this._evictLRU();
     }
 
-    await this._persistCache();
+    this._schedulePersist();
 
     return entry;
+  }
+
+  /**
+   * Merge new data into an existing entry without discarding known fields.
+   * Used for DOM-scraped data, which is often less complete than API data.
+   * @param {string} username
+   * @param {Object} data Partial profile data
+   */
+  async merge(username, data) {
+    await this.init();
+
+    const existing = this.memoryCache.get(username.toLowerCase());
+    if (!existing || existing.isNegative) {
+      return this.set(username, data, Boolean(data.isVerified), false);
+    }
+
+    const merged = { ...existing };
+    for (const [key, value] of Object.entries(data)) {
+      if (value === null || value === undefined || value === false) continue;
+      merged[key] = value;
+    }
+    delete merged.fetchedAt;
+    delete merged.lastAccessed;
+    delete merged.ttl;
+    delete merged.isNegative;
+
+    return this.set(username, merged, Boolean(merged.isVerified), false);
   }
 
   /**
@@ -139,13 +183,18 @@ class CacheManager {
 
     const key = username.toLowerCase();
     this.memoryCache.delete(key);
-    await this._persistCache();
+    this._schedulePersist();
   }
 
   /**
    * Clear entire cache
    */
   async clear() {
+    await this.init();
+    if (this.persistTimer) {
+      clearTimeout(this.persistTimer);
+      this.persistTimer = null;
+    }
     this.memoryCache.clear();
     await chrome.storage.local.remove([this.STORAGE_KEY, this.STATS_KEY]);
     XFlagLogger.log('[CacheManager] Cache cleared');
@@ -250,7 +299,7 @@ class CacheManager {
       }
     }
 
-    await this._persistCache();
+    await this.flush();
     XFlagLogger.log(`[CacheManager] Imported ${imported} entries`);
 
     return imported;
@@ -275,20 +324,49 @@ class CacheManager {
   }
 
   /**
+   * Write the cache to storage soon, coalescing bursts of updates into one
+   * write instead of serializing the whole cache on every change.
+   */
+  _schedulePersist() {
+    if (this.persistTimer) return;
+    this.persistTimer = setTimeout(() => {
+      this.persistTimer = null;
+      this.persistPromise = this._persistCache().finally(() => {
+        this.persistPromise = null;
+      });
+    }, this.PERSIST_DELAY);
+  }
+
+  /**
+   * Write any pending changes to storage immediately.
+   */
+  async flush() {
+    if (this.persistTimer) {
+      clearTimeout(this.persistTimer);
+      this.persistTimer = null;
+      await this._persistCache();
+    } else if (this.persistPromise) {
+      await this.persistPromise;
+    } else {
+      await this._persistCache();
+    }
+  }
+
+  /**
    * Persist memory cache to storage
    */
-  async _persistCache() {
+  async _persistCache(attempt = 0) {
     try {
       const cacheObj = Object.fromEntries(this.memoryCache);
       await chrome.storage.local.set({ [this.STORAGE_KEY]: cacheObj });
     } catch (error) {
       console.error('[CacheManager] Persist error:', error);
 
-      // If storage quota exceeded, evict more entries
-      if (error.message?.includes('QUOTA')) {
+      // If storage quota exceeded, evict more entries and retry a few times
+      if (/quota/i.test(error.message || '') && attempt < 5 && this.memoryCache.size > 0) {
         await this._evictLRU();
         await this._evictLRU(); // Evict more aggressively
-        await this._persistCache();
+        await this._persistCache(attempt + 1);
       }
     }
   }

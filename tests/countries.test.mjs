@@ -13,7 +13,7 @@ const source = await readFile(
 const context = vm.createContext({ window: {} });
 vm.runInContext(source, context);
 
-const { getFlag, normalizeCountryName } = context.window;
+const { getFlag, getCountryCode, normalizeCountryName } = context.window;
 
 test('country names and ISO codes resolve case-insensitively', () => {
   assert.equal(getFlag('United States'), '🇺🇸');
@@ -31,4 +31,38 @@ test('unknown and empty values do not create a flag', () => {
   assert.equal(getFlag('Atlantis'), null);
   assert.equal(getFlag(''), null);
   assert.equal(getFlag(null), null);
+});
+
+test('diacritics, punctuation and alternative names resolve', () => {
+  assert.equal(getFlag('Türkiye'), '🇹🇷');
+  assert.equal(getFlag("Côte d'Ivoire"), '🇨🇮');
+  assert.equal(getFlag('São Tomé and Príncipe'), '🇸🇹');
+  assert.equal(getFlag('The Netherlands'), '🇳🇱');
+  assert.equal(getFlag('United States of America'), '🇺🇸');
+  assert.equal(getFlag('St. Lucia'), '🇱🇨');
+  assert.equal(getFlag('Bosnia & Herzegovina'), '🇧🇦');
+});
+
+test('previously missing countries and territories resolve', () => {
+  assert.equal(getFlag('Kosovo'), '🇽🇰');
+  assert.equal(getFlag('Democratic Republic of the Congo'), '🇨🇩');
+  assert.equal(getFlag('Greenland'), '🇬🇱');
+  assert.equal(getFlag('Puerto Rico'), '🇵🇷');
+  assert.equal(getFlag('CD'), '🇨🇩');
+});
+
+test('connected-via sources are reduced to their region', () => {
+  assert.equal(normalizeCountryName('Europe Android App'), 'Europe');
+  assert.equal(normalizeCountryName('United States App Store'), 'United States');
+  assert.equal(normalizeCountryName('Web'), 'Web');
+  assert.equal(getFlag('India Android App'), '🇮🇳');
+});
+
+test('country codes identify countries but not regions', () => {
+  assert.equal(getCountryCode('United States'), 'US');
+  assert.equal(getCountryCode('US App Store'), 'US');
+  assert.equal(getCountryCode('England'), 'GB');
+  assert.equal(getCountryCode('Europe'), null);
+  assert.equal(getCountryCode('South Asia'), null);
+  assert.equal(getCountryCode('Atlantis'), null);
 });

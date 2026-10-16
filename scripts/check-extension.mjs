@@ -37,6 +37,24 @@ for (const relativePath of referencedFiles) {
   await access(path.join(root, relativePath));
 }
 
+// Firefox runs the background as an event page without importScripts(), so
+// background.scripts must list every file the service worker imports, in
+// order, followed by the worker itself.
+const backgroundSource = await readFile(
+  path.join(root, manifest.background.service_worker),
+  'utf8'
+);
+const importList = backgroundSource.match(/importScripts\((\s*'[^)]*)\)/);
+assert.ok(importList, 'background service worker must call importScripts()');
+const workerDir = path.dirname(manifest.background.service_worker);
+const importedFiles = [...importList[1].matchAll(/'([^']+)'/g)]
+  .map(match => path.posix.normalize(path.posix.join(workerDir, match[1])));
+assert.deepEqual(
+  manifest.background.scripts,
+  [...importedFiles, manifest.background.service_worker],
+  'background.scripts must match the service worker importScripts() list'
+);
+
 async function collectJavaScriptFiles(directory) {
   const entries = await readdir(directory, { withFileTypes: true });
   const files = [];

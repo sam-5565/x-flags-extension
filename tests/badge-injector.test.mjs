@@ -86,3 +86,66 @@ test('suspended profiles use the suspended-account badge', () => {
     'Account suspended'
   );
 });
+
+function tooltips(badge) {
+  return badge.children.map(child => child.attributes.get('data-tooltip'));
+}
+
+function hasMismatch(badge) {
+  return badge.children.some(child => child.className.includes('x-flag-mismatch'));
+}
+
+test('same country written two ways is not a mismatch', () => {
+  const badgeInjector = loadBadgeInjector();
+  badgeInjector.init({});
+
+  const badge = badgeInjector.createBadge({
+    basedIn: { country: 'United States', raw: 'United States' },
+    connectedVia: { country: 'US', raw: 'US App Store' }
+  });
+
+  assert.equal(hasMismatch(badge), false);
+  assert.deepEqual(tooltips(badge), [
+    'Account based in: United States',
+    'Connected via: US App Store'
+  ]);
+});
+
+test('different countries are highlighted, regions are not', () => {
+  const badgeInjector = loadBadgeInjector();
+  badgeInjector.init({});
+
+  assert.equal(hasMismatch(badgeInjector.createBadge({
+    basedIn: { country: 'Germany' },
+    connectedVia: { country: 'Nigeria', raw: 'Nigeria App Store' }
+  })), true);
+
+  assert.equal(hasMismatch(badgeInjector.createBadge({
+    basedIn: { country: 'Germany' },
+    connectedVia: { country: 'Europe', raw: 'Europe Android App' }
+  })), false);
+});
+
+test('join year tooltip includes month and username changes', () => {
+  const badgeInjector = loadBadgeInjector();
+  badgeInjector.init({});
+
+  const badge = badgeInjector.createBadge({
+    joinedYear: 2014,
+    joinedMonth: 'Mar',
+    usernameChanges: 2
+  });
+
+  assert.equal(badge.children[0].textContent, "'14");
+  assert.equal(tooltips(badge)[0], 'Joined Mar 2014 · username changed 2 times');
+});
+
+test('hidden settings produce no badge', () => {
+  const badgeInjector = loadBadgeInjector();
+  badgeInjector.init({ showBasedIn: false, showConnectedVia: false, showYear: false });
+
+  assert.equal(badgeInjector.createBadge({
+    basedIn: { country: 'France' },
+    joinedYear: 2020
+  }), null);
+});

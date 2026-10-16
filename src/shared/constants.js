@@ -44,6 +44,16 @@ const CONSTANTS = {
     SCROLL_CONTAINER: 'main'
   },
 
+  // First path segments on x.com that are not usernames
+  RESERVED_PATHS: [
+    'about', 'account', 'ads', 'bookmarks', 'business', 'communities',
+    'compose', 'connect_people', 'developers', 'directory', 'download',
+    'explore', 'grok', 'hashtag', 'help', 'home', 'i', 'intent', 'jobs',
+    'lists', 'live', 'login', 'logout', 'messages', 'moments',
+    'notifications', 'premium', 'privacy', 'search', 'settings', 'share',
+    'signup', 'topics', 'tos'
+  ],
+
   // Profile page selectors for scraping
   PROFILE_SELECTORS: {
     // Location info spans

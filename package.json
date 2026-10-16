@@ -1,10 +1,11 @@
 {
   "name": "x-flags-extension",
-  "version": "1.0.1",
+  "version": "1.1.0",
   "private": true,
   "description": "Display country flags and account metadata next to usernames on X",
   "scripts": {
     "check": "node scripts/check-extension.mjs",
-    "test": "node --test && npm run check"
+    "test": "node --test && npm run check",
+    "package": "npm test && node scripts/package.mjs"
   }
 }

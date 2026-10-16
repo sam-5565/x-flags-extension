@@ -367,55 +367,205 @@ const COUNTRY_CODES = {
 };
 
 /**
- * Get flag emoji for a country name or code
- * @param {string} input - Country name or ISO code
- * @returns {string|null} Flag emoji or null if not found
+ * Build a flag emoji from an ISO 3166-1 alpha-2 code.
+ * @param {string} code - Two-letter country code
+ * @returns {string|null}
  */
-function getFlag(input) {
-  if (!input) return null;
+function flagFromCode(code) {
+  if (typeof code !== 'string' || !/^[A-Za-z]{2}$/.test(code)) return null;
+  return String.fromCodePoint(
+    ...code.toUpperCase().split('').map(char => 0x1F1E6 + char.charCodeAt(0) - 65)
+  );
+}
 
-  const normalized = input.trim().toLowerCase();
+// Countries and territories missing from the tables above, plus alternative
+// spellings that X and its users commonly use. Keys are ISO codes; values are
+// lookup keys in the normalized form produced by normalizeLookupKey().
+const COUNTRY_ALIASES = {
+  AE: ['emirates'],
+  AI: ['anguilla'],
+  AQ: ['antarctica'],
+  AS: ['american samoa'],
+  AW: ['aruba'],
+  AX: ['aland islands', 'aland'],
+  BL: ['saint barthelemy', 'st barthelemy', 'st barts'],
+  BM: ['bermuda'],
+  BO: ['bolivia plurinational state of'],
+  BQ: ['caribbean netherlands', 'bonaire'],
+  CC: ['cocos islands', 'cocos keeling islands'],
+  CD: [
+    'democratic republic of the congo', 'democratic republic of congo',
+    'dr congo', 'drc', 'congo-kinshasa', 'congo democratic republic of the'
+  ],
+  CG: ['republic of the congo', 'congo-brazzaville', 'congo republic of the'],
+  CI: ['cote divoire', 'cote d ivoire'],
+  CK: ['cook islands'],
+  CV: ['cabo verde'],
+  CW: ['curacao'],
+  CX: ['christmas island'],
+  EH: ['western sahara'],
+  FK: ['falkland islands', 'falklands'],
+  FO: ['faroe islands', 'faroes'],
+  GB: ['northern ireland', 'united kingdom of great britain and northern ireland'],
+  GF: ['french guiana'],
+  GG: ['guernsey'],
+  GI: ['gibraltar'],
+  GL: ['greenland'],
+  GP: ['guadeloupe'],
+  GU: ['guam'],
+  HK: ['hong kong sar', 'hong kong sar china', 'hongkong'],
+  IM: ['isle of man'],
+  IR: ['iran islamic republic of'],
+  JE: ['jersey'],
+  KN: ['st kitts and nevis'],
+  KP: ['dprk', 'korea democratic peoples republic of', 'democratic peoples republic of korea'],
+  KR: ['korea republic of', 'republic of korea'],
+  KY: ['cayman islands'],
+  LA: ['lao peoples democratic republic', 'lao pdr'],
+  LC: ['st lucia'],
+  MD: ['moldova republic of', 'republic of moldova'],
+  MF: ['saint martin', 'st martin'],
+  MO: ['macao', 'macau sar', 'macao sar china'],
+  MP: ['northern mariana islands'],
+  MQ: ['martinique'],
+  MS: ['montserrat'],
+  NC: ['new caledonia'],
+  NF: ['norfolk island'],
+  NL: ['nederland'],
+  NU: ['niue'],
+  PF: ['french polynesia'],
+  PM: ['saint pierre and miquelon'],
+  PN: ['pitcairn islands', 'pitcairn'],
+  PS: ['state of palestine', 'palestinian territories', 'palestine state of'],
+  RE: ['reunion'],
+  SH: ['saint helena'],
+  SX: ['sint maarten'],
+  SY: ['syrian arab republic'],
+  SZ: ['swaziland'],
+  TC: ['turks and caicos islands', 'turks and caicos'],
+  TK: ['tokelau'],
+  TR: ['turkiye'],
+  TZ: ['tanzania united republic of', 'united republic of tanzania'],
+  US: ['united states of america'],
+  VC: ['st vincent and the grenadines'],
+  VE: ['venezuela bolivarian republic of'],
+  VG: ['british virgin islands', 'virgin islands british'],
+  VI: ['us virgin islands', 'united states virgin islands', 'virgin islands us'],
+  WF: ['wallis and futuna'],
+  XK: ['kosovo'],
+  YT: ['mayotte']
+};
 
-  // Try direct country name lookup
-  if (COUNTRY_FLAGS[normalized]) {
-    return COUNTRY_FLAGS[normalized];
+for (const [code, names] of Object.entries(COUNTRY_ALIASES)) {
+  const flag = COUNTRY_CODES[code] || flagFromCode(code);
+  COUNTRY_CODES[code] = flag;
+  for (const name of names) {
+    if (!COUNTRY_FLAGS[name]) COUNTRY_FLAGS[name] = flag;
   }
+}
 
-  // Try ISO code lookup (case insensitive)
-  const upperCode = input.trim().toUpperCase();
-  if (COUNTRY_CODES[upperCode]) {
-    return COUNTRY_CODES[upperCode];
-  }
+// Trailing words in X's "Connected via" values, e.g. "Europe Android App" or
+// "United States App Store".
+const SOURCE_SUFFIX_PATTERN =
+  /\s+(?:android|ios|iphone|ipad|web|app|apps|store|play|google|mac|macos|windows)$/i;
 
-  // Try to extract country from "Country App Store" format
-  const appStoreMatch = normalized.match(/^(.+?)\s+app\s+store$/i);
-  if (appStoreMatch) {
-    return getFlag(appStoreMatch[1]);
-  }
-
-  // Try to extract country from "Country Play Store" format
-  const playStoreMatch = normalized.match(/^(.+?)\s+(?:play|google)\s+store$/i);
-  if (playStoreMatch) {
-    return getFlag(playStoreMatch[1]);
-  }
-
-  return null;
+/**
+ * Normalize free-form country text into the key format used by COUNTRY_FLAGS.
+ * Handles case, diacritics ("Türkiye"), punctuation ("Côte d'Ivoire",
+ * "St. Lucia"), ampersands and a leading "The".
+ * @param {string} input
+ * @returns {string}
+ */
+function normalizeLookupKey(input) {
+  return String(input)
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .toLowerCase()
+    .replace(/&/g, ' and ')
+    .replace(/['’`.]/g, '')
+    .replace(/[^a-z0-9\s-]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/^the /, '');
 }
 
 /**
  * Get country name from various input formats
+ * Strips app-store/device suffixes such as "App Store" or "Android App".
  * @param {string} input - Raw country string
  * @returns {string} Normalized country name
  */
 function normalizeCountryName(input) {
   if (!input) return '';
 
-  let normalized = input.trim();
+  const original = String(input).trim();
+  let normalized = original;
+  let previous;
+  do {
+    previous = normalized;
+    normalized = normalized.replace(SOURCE_SUFFIX_PATTERN, '').trim();
+  } while (normalized && normalized !== previous);
 
-  // Remove "App Store" or "Play Store" suffix
-  normalized = normalized.replace(/\s+(app|play|google)\s+store$/i, '');
+  return normalized || original;
+}
 
-  return normalized;
+/**
+ * Get flag emoji for a country name or code
+ * @param {string} input - Country name or ISO code
+ * @returns {string|null} Flag emoji or null if not found
+ */
+function getFlag(input) {
+  if (!input || typeof input !== 'string') return null;
+
+  const trimmed = input.trim();
+  if (!trimmed) return null;
+
+  // Try ISO code lookup first for exact two-letter input ("GB", "us").
+  if (/^[A-Za-z]{2}$/.test(trimmed)) {
+    const byCode = COUNTRY_CODES[trimmed.toUpperCase()];
+    if (byCode) return COUNTRY_FLAGS[trimmed.toLowerCase()] || byCode;
+  }
+
+  const key = normalizeLookupKey(trimmed);
+  if (COUNTRY_FLAGS[key]) {
+    return COUNTRY_FLAGS[key];
+  }
+
+  // Try again without "App Store" / "Android App" style suffixes.
+  const withoutSuffix = normalizeCountryName(trimmed);
+  if (withoutSuffix !== trimmed) {
+    return getFlag(withoutSuffix);
+  }
+
+  return null;
+}
+
+/**
+ * Resolve a country name or code to an ISO 3166-1 alpha-2 code.
+ * Returns null for regions ("Europe", "South Asia") and unknown values, so
+ * callers can tell a real country mismatch from a coarser region.
+ * @param {string} input
+ * @returns {string|null}
+ */
+function getCountryCode(input) {
+  const flag = getFlag(input);
+  if (!flag) return null;
+
+  const codePoints = Array.from(flag).map(char => char.codePointAt(0));
+
+  if (codePoints.length === 2 &&
+      codePoints.every(cp => cp >= 0x1F1E6 && cp <= 0x1F1FF)) {
+    const code = String.fromCharCode(...codePoints.map(cp => cp - 0x1F1E6 + 65));
+    // The EU flag is a region, not a country.
+    return code === 'EU' ? null : code;
+  }
+
+  // England, Scotland and Wales use subdivision tag flags.
+  if (codePoints[0] === 0x1F3F4 && codePoints[1] === 0xE0067 && codePoints[2] === 0xE0062) {
+    return 'GB';
+  }
+
+  return null;
 }
 
 // Make available globally
@@ -423,5 +573,7 @@ if (typeof window !== 'undefined') {
   window.COUNTRY_FLAGS = COUNTRY_FLAGS;
   window.COUNTRY_CODES = COUNTRY_CODES;
   window.getFlag = getFlag;
+  window.getCountryCode = getCountryCode;
+  window.flagFromCode = flagFromCode;
   window.normalizeCountryName = normalizeCountryName;
 }

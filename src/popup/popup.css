@@ -259,3 +259,29 @@ body {
   flex: 1;
   padding: 8px 12px;
 }
+
+/* Rate-limit status */
+.status-note {
+  margin: 0 0 12px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: #f4b740;
+  background-color: rgba(244, 183, 64, 0.12);
+}
+
+.status-note[hidden] {
+  display: none;
+}
+
+/* Settings opened in a full tab (Firefox import) */
+body.in-tab {
+  display: flex;
+  justify-content: center;
+  padding: 24px 0;
+}
+
+body.in-tab .popup-container {
+  width: 360px;
+}
